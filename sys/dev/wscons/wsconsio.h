@@ -550,6 +550,7 @@ struct wsdisplay_font {
 	int encoding;
 #define WSDISPLAY_FONTENC_ISO 0
 #define WSDISPLAY_FONTENC_IBM 1
+#define WSDISPLAY_FONTENC_UC8 2
 	u_int fontwidth, fontheight, stride;
 #define WSDISPLAY_MAXFONTSZ	(512*1024)
 	int bitorder, byteorder;

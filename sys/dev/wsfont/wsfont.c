@@ -43,6 +43,11 @@
 
 #undef HAVE_FONT
 
+#ifdef FONT_CUSTOM
+#define HAVE_FONT 1
+#include <dev/wsfont/custom.h>
+#endif
+
 #ifdef FONT_SPLEEN5x8
 #define HAVE_FONT 1
 #include <dev/wsfont/spleen5x8.h>
@@ -139,6 +144,11 @@ static struct font builtin_fonts[] = {
 #define BUILTIN_FONT(f, c) \
 	{ .font = &(f), .cookie = (c), .lockcount = 0, \
 	  .flg = WSFONT_STATIC | WSFONT_BUILTIN }
+
+#ifdef FONT_CUSTOM
+  BUILTIN_FONT(custom,1),
+#endif
+  
 #ifdef FONT_GALLANT12x22
 	BUILTIN_FONT(gallant12x22, 1),
 #endif
@@ -737,6 +747,22 @@ wsfont_map_unichar(struct wsdisplay_font *font, int c)
 {
 	if (font->encoding == WSDISPLAY_FONTENC_ISO)
 		return (c);
+
+	if (font->encoding == WSDISPLAY_FONTENC_UC8) {
+	if (c < 0x500)
+		return (c);
+	else if (c >= 0x590 && c < 0x600)
+		return (c-0x90);
+	else if (c >= 0x16A0 && c < 0x1700)
+		return (c-0x1130);
+	else if (c >= 0x2000 && c < 0x2400)
+		return (c-0x1A30);
+	else if (c >= 0x2500 && c < 0x2700)
+		return (c-0x1B30);
+	else if (c >= 0x27C0 && c < 0x2B00)
+		return (c-0x1BF0);
+	}
+
 
 #if !defined(SMALL_KERNEL)
 	if (font->encoding >= 0 && font->encoding < nitems(encodings)) {
