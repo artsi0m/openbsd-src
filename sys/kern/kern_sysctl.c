@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_sysctl.c,v 1.420 2023/10/01 15:58:12 krw Exp $	*/
+/*	$OpenBSD: kern_sysctl.c,v 1.424 2024/01/19 01:43:27 bluhm Exp $	*/
 /*	$NetBSD: kern_sysctl.c,v 1.17 1996/05/20 17:49:05 mrg Exp $	*/
 
 /*-
@@ -1283,13 +1283,8 @@ fill_file(struct kinfo_file *kf, struct file *fp, struct filedesc *fdp,
 		if (so == NULL) {
 			so = (struct socket *)fp->f_data;
 			/* if so is passed as parameter it is already locked */
-			switch (so->so_proto->pr_domain->dom_family) {
-			case AF_INET:
-			case AF_INET6:
-				NET_LOCK();
-				locked = 1;
-				break;
-			}
+			solock(so);
+			locked = 1;
 		}
 
 		kf->so_type = so->so_type;
@@ -1312,14 +1307,14 @@ fill_file(struct kinfo_file *kf, struct file *fp, struct filedesc *fdp,
 			kf->so_splicelen = -1;
 		if (so->so_pcb == NULL) {
 			if (locked)
-				NET_UNLOCK();
+				sounlock(so);
 			break;
 		}
 		switch (kf->so_family) {
 		case AF_INET: {
 			struct inpcb *inpcb = so->so_pcb;
 
-			NET_ASSERT_LOCKED();
+			soassertlocked(so);
 			if (show_pointers)
 				kf->inp_ppcb = PTRTOINT64(inpcb->inp_ppcb);
 			kf->inp_lport = inpcb->inp_lport;
@@ -1341,7 +1336,7 @@ fill_file(struct kinfo_file *kf, struct file *fp, struct filedesc *fdp,
 		case AF_INET6: {
 			struct inpcb *inpcb = so->so_pcb;
 
-			NET_ASSERT_LOCKED();
+			soassertlocked(so);
 			if (show_pointers)
 				kf->inp_ppcb = PTRTOINT64(inpcb->inp_ppcb);
 			kf->inp_lport = inpcb->inp_lport;
@@ -1388,7 +1383,7 @@ fill_file(struct kinfo_file *kf, struct file *fp, struct filedesc *fdp,
 		    }
 		}
 		if (locked)
-			NET_UNLOCK();
+			sounlock(so);
 		break;
 	    }
 
@@ -1493,6 +1488,12 @@ sysctl_file(int *name, u_int namelen, char *where, size_t *sizep,
 			TAILQ_FOREACH(inp, &udbtable.inpt_queue, inp_queue)
 				FILLSO(inp->inp_socket);
 			mtx_leave(&udbtable.inpt_mtx);
+#ifdef INET6
+			mtx_enter(&udb6table.inpt_mtx);
+			TAILQ_FOREACH(inp, &udb6table.inpt_queue, inp_queue)
+				FILLSO(inp->inp_socket);
+			mtx_leave(&udb6table.inpt_mtx);
+#endif
 			mtx_enter(&rawcbtable.inpt_mtx);
 			TAILQ_FOREACH(inp, &rawcbtable.inpt_queue, inp_queue)
 				FILLSO(inp->inp_socket);

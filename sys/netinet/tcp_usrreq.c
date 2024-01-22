@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_usrreq.c,v 1.227 2023/12/03 20:24:17 bluhm Exp $	*/
+/*	$OpenBSD: tcp_usrreq.c,v 1.229 2024/01/19 02:24:07 bluhm Exp $	*/
 /*	$NetBSD: tcp_usrreq.c,v 1.20 1996/02/13 23:44:16 christos Exp $	*/
 
 /*
@@ -175,7 +175,7 @@ int	tcp_fill_info(struct tcpcb *, struct socket *, struct mbuf *);
 int	tcp_ident(void *, size_t *, void *, size_t, int);
 
 static inline int tcp_sogetpcb(struct socket *, struct inpcb **,
-                      struct tcpcb **);
+		    struct tcpcb **);
 
 static inline int
 tcp_sogetpcb(struct socket *so, struct inpcb **rinp, struct tcpcb **rtp)
@@ -502,7 +502,7 @@ tcp_detach(struct socket *so)
 {
 	struct inpcb *inp;
 	struct tcpcb *otp = NULL, *tp;
-	int error = 0;
+	int error;
 	short ostate;
 
 	soassertlocked(so);
@@ -526,7 +526,7 @@ tcp_detach(struct socket *so)
 
 	if (otp)
 		tcp_trace(TA_USER, ostate, tp, otp, NULL, PRU_DETACH, 0);
-	return (error);
+	return (0);
 }
 
 /*
@@ -579,7 +579,7 @@ tcp_listen(struct socket *so)
 	if (inp->inp_lport == 0)
 		if ((error = in_pcbbind(inp, NULL, curproc)))
 			goto out;
-	
+
 	/*
 	 * If the in_pcbbind() above is called, the tp->pf
 	 * should still be whatever it was before.
@@ -685,26 +685,17 @@ tcp_accept(struct socket *so, struct mbuf *nam)
 	struct inpcb *inp;
 	struct tcpcb *tp;
 	int error;
-	short ostate;
 
 	soassertlocked(so);
 
 	if ((error = tcp_sogetpcb(so, &inp, &tp)))
 		return (error);
 
-	if (so->so_options & SO_DEBUG)
-		ostate = tp->t_state;
-
-#ifdef INET6
-	if (inp->inp_flags & INP_IPV6)
-		in6_setpeeraddr(inp, nam);
-	else
-#endif
-		in_setpeeraddr(inp, nam);
+	in_setpeeraddr(inp, nam);
 
 	if (so->so_options & SO_DEBUG)
-		tcp_trace(TA_USER, ostate, tp, tp, NULL, PRU_ACCEPT, 0);
-	return (error);
+		tcp_trace(TA_USER, tp->t_state, tp, tp, NULL, PRU_ACCEPT, 0);
+	return (0);
 }
 
 /*
@@ -994,12 +985,7 @@ tcp_sockaddr(struct socket *so, struct mbuf *nam)
 	if ((error = tcp_sogetpcb(so, &inp, &tp)))
 		return (error);
 
-#ifdef INET6
-	if (inp->inp_flags & INP_IPV6)
-		in6_setsockaddr(inp, nam);
-	else
-#endif
-		in_setsockaddr(inp, nam);
+	in_setsockaddr(inp, nam);
 
 	if (so->so_options & SO_DEBUG)
 		tcp_trace(TA_USER, tp->t_state, tp, tp, NULL,
@@ -1019,16 +1005,10 @@ tcp_peeraddr(struct socket *so, struct mbuf *nam)
 	if ((error = tcp_sogetpcb(so, &inp, &tp)))
 		return (error);
 
-#ifdef INET6
-	if (inp->inp_flags & INP_IPV6)
-		in6_setpeeraddr(inp, nam);
-	else
-#endif
-		in_setpeeraddr(inp, nam);
+	in_setpeeraddr(inp, nam);
 
 	if (so->so_options & SO_DEBUG)
-		tcp_trace(TA_USER, tp->t_state, tp, tp, NULL,
-		    PRU_PEERADDR, 0);
+		tcp_trace(TA_USER, tp->t_state, tp, tp, NULL, PRU_PEERADDR, 0);
 	return (0);
 }
 

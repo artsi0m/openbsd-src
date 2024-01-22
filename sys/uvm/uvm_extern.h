@@ -1,4 +1,4 @@
-/*	$OpenBSD: uvm_extern.h,v 1.171 2023/08/18 09:18:52 claudio Exp $	*/
+/*	$OpenBSD: uvm_extern.h,v 1.173 2024/01/19 21:20:35 deraadt Exp $	*/
 /*	$NetBSD: uvm_extern.h,v 1.57 2001/03/09 01:02:12 chs Exp $	*/
 
 /*
@@ -214,8 +214,6 @@ struct vmspace {
 	caddr_t	vm_daddr;	/* [I] user virtual address of data */
 	caddr_t vm_maxsaddr;	/* [I] user VA at max stack growth */
 	caddr_t vm_minsaddr;	/* [I] user VA at top of stack */
-	vaddr_t	vm_execve;	/* [v] execve systemcall stub region */
-	vaddr_t vm_execve_end;	/* [v] execve systemcall stub region */
 };
 
 /*
@@ -441,8 +439,8 @@ void			uvm_pmr_use_inc(paddr_t, paddr_t);
 void			uvm_swap_init(void);
 typedef int		uvm_coredump_setup_cb(int _nsegment, void *_cookie);
 typedef int		uvm_coredump_walk_cb(vaddr_t _start, vaddr_t _realend,
-			    vaddr_t _end, vm_prot_t _prot, int _nsegment,
-			    void *_cookie);
+			    vaddr_t _end, vm_prot_t _prot, int _isvnode,
+			    int _nsegment, void *_cookie);
 int			uvm_coredump_walkmap(struct proc *_p,
 			    uvm_coredump_setup_cb *_setup,
 			    uvm_coredump_walk_cb *_walk, void *_cookie);

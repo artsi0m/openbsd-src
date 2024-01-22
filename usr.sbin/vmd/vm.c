@@ -1,4 +1,4 @@
-/*	$OpenBSD: vm.c,v 1.94 2023/09/26 01:53:54 dv Exp $	*/
+/*	$OpenBSD: vm.c,v 1.96 2024/01/18 14:49:59 claudio Exp $	*/
 
 /*
  * Copyright (c) 2015 Mike Larkin <mlarkin@openbsd.org>
@@ -596,7 +596,7 @@ vm_dispatch_vmm(int fd, short event, void *arg)
 			break;
 		case IMSG_VMDOP_SEND_VM_REQUEST:
 			vmr.vmr_id = vm->vm_vmid;
-			vmr.vmr_result = send_vm(imsg.fd, vm);
+			vmr.vmr_result = send_vm(imsg_get_fd(&imsg), vm);
 			imsg_compose_event(&vm->vm_iev,
 			    IMSG_VMDOP_SEND_VM_RESPONSE,
 			    imsg.hdr.peerid, imsg.hdr.pid, -1, &vmr,
@@ -1749,6 +1749,8 @@ vcpu_exit_inout(struct vm_run_params *vrp)
 		intr = ioports_map[vei->vei.vei_port](vrp);
 	else if (vei->vei.vei_dir == VEI_DIR_IN)
 		set_return_data(vei, 0xFFFFFFFF);
+
+	vei->vrs.vrs_gprs[VCPU_REGS_RIP] += vei->vei.vei_insn_len;
 
 	if (intr != 0xFF)
 		vcpu_assert_pic_irq(vrp->vrp_vm_id, vrp->vrp_vcpu_id, intr);

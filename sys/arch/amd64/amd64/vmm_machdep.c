@@ -1,4 +1,4 @@
-/* $OpenBSD: vmm_machdep.c,v 1.13 2024/01/06 13:17:20 dv Exp $ */
+/* $OpenBSD: vmm_machdep.c,v 1.15 2024/01/11 17:13:48 jan Exp $ */
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -158,7 +158,6 @@ static int vmx_remote_vmclear(struct cpu_info*, struct vcpu *);
 #endif
 
 #ifdef VMM_DEBUG
-void dump_vcpu(struct vcpu *);
 void vmx_vcpu_dump_regs(struct vcpu *);
 void vmx_dump_vmcs(struct vcpu *);
 const char *msr_name_decode(uint32_t);
@@ -3989,6 +3988,13 @@ vcpu_run_vmx(struct vcpu *vcpu, struct vm_run_params *vrp)
 			if (vcpu->vc_exit.vei.vei_dir == VEI_DIR_IN)
 				vcpu->vc_gueststate.vg_rax =
 				    vcpu->vc_exit.vei.vei_data;
+			vcpu->vc_gueststate.vg_rip =
+			    vcpu->vc_exit.vrs.vrs_gprs[VCPU_REGS_RIP];
+			if (vmwrite(VMCS_GUEST_IA32_RIP,
+			    vcpu->vc_gueststate.vg_rip)) {
+				printf("%s: failed to update rip\n", __func__);
+				return (EINVAL);
+			}
 			break;
 		case VMX_EXIT_EPT_VIOLATION:
 			ret = vcpu_writeregs_vmx(vcpu, VM_RWREGS_GPRS, 0,
@@ -4525,7 +4531,6 @@ svm_handle_exit(struct vcpu *vcpu)
 	case SVM_VMEXIT_IOIO:
 		if (svm_handle_inout(vcpu) == 0)
 			ret = EAGAIN;
-		update_rip = 1;
 		break;
 	case SVM_VMEXIT_HLT:
 		ret = svm_handle_hlt(vcpu);
@@ -4610,7 +4615,6 @@ vmx_handle_exit(struct vcpu *vcpu)
 	case VMX_EXIT_IO:
 		if (vmx_handle_inout(vcpu) == 0)
 			ret = EAGAIN;
-		update_rip = 1;
 		break;
 	case VMX_EXIT_EXTINT:
 		vmx_handle_intr(vcpu);
@@ -5159,12 +5163,6 @@ svm_handle_inout(struct vcpu *vcpu)
 	struct vmcb *vmcb = (struct vmcb *)vcpu->vc_control_va;
 
 	insn_length = vmcb->v_exitinfo2 - vmcb->v_rip;
-	if (insn_length != 1 && insn_length != 2) {
-		DPRINTF("%s: IN/OUT instruction with length %lld not "
-		    "supported\n", __func__, insn_length);
-		return (EINVAL);
-	}
-
 	exit_qual = vmcb->v_exitinfo1;
 
 	/* Bit 0 - direction */
@@ -5190,10 +5188,10 @@ svm_handle_inout(struct vcpu *vcpu)
 	/* Data */
 	vcpu->vc_exit.vei.vei_data = vmcb->v_rax;
 
+	vcpu->vc_exit.vei.vei_insn_len = (uint8_t)insn_length;
+
 	TRACEPOINT(vmm, inout, vcpu, vcpu->vc_exit.vei.vei_port,
 	    vcpu->vc_exit.vei.vei_dir, vcpu->vc_exit.vei.vei_data);
-
-	vcpu->vc_gueststate.vg_rip += insn_length;
 
 	return (0);
 }
@@ -5220,12 +5218,6 @@ vmx_handle_inout(struct vcpu *vcpu)
 		return (EINVAL);
 	}
 
-	if (insn_length != 1 && insn_length != 2) {
-		DPRINTF("%s: IN/OUT instruction with length %lld not "
-		    "supported\n", __func__, insn_length);
-		return (EINVAL);
-	}
-
 	if (vmx_get_exit_qualification(&exit_qual)) {
 		printf("%s: can't get exit qual\n", __func__);
 		return (EINVAL);
@@ -5249,10 +5241,10 @@ vmx_handle_inout(struct vcpu *vcpu)
 	/* Data */
 	vcpu->vc_exit.vei.vei_data = (uint32_t)vcpu->vc_gueststate.vg_rax;
 
+	vcpu->vc_exit.vei.vei_insn_len = (uint8_t)insn_length;
+
 	TRACEPOINT(vmm, inout, vcpu, vcpu->vc_exit.vei.vei_port,
 	    vcpu->vc_exit.vei.vei_dir, vcpu->vc_exit.vei.vei_data);
-
-	vcpu->vc_gueststate.vg_rip += insn_length;
 
 	return (0);
 }
@@ -6416,6 +6408,9 @@ vcpu_run_svm(struct vcpu *vcpu, struct vm_run_params *vrp)
 				    vcpu->vc_exit.vei.vei_data;
 				vmcb->v_rax = vcpu->vc_gueststate.vg_rax;
 			}
+			vcpu->vc_gueststate.vg_rip =
+			    vcpu->vc_exit.vrs.vrs_gprs[VCPU_REGS_RIP];
+			vmcb->v_rip = vcpu->vc_gueststate.vg_rip;
 			break;
 		case SVM_VMEXIT_NPF:
 			ret = vcpu_writeregs_svm(vcpu, VM_RWREGS_GPRS,

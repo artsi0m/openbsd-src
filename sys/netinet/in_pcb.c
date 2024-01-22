@@ -1,4 +1,4 @@
-/*	$OpenBSD: in_pcb.c,v 1.283 2024/01/01 22:16:51 bluhm Exp $	*/
+/*	$OpenBSD: in_pcb.c,v 1.286 2024/01/19 02:24:07 bluhm Exp $	*/
 /*	$NetBSD: in_pcb.c,v 1.25 1996/02/13 23:41:53 christos Exp $	*/
 
 /*
@@ -133,7 +133,7 @@ uint64_t in_pcblhash(struct inpcbtable *, u_int, u_short);
 
 struct inpcb *in_pcblookup_lock(struct inpcbtable *, struct in_addr, u_int,
     struct in_addr, u_int, u_int, int);
-int	in_pcbaddrisavail_lock(struct inpcb *, struct sockaddr_in *, int,
+int	in_pcbaddrisavail_lock(const struct inpcb *, struct sockaddr_in *, int,
     struct proc *, int);
 int	in_pcbpickport(u_int16_t *, const void *, int, const struct inpcb *,
     struct proc *);
@@ -365,8 +365,8 @@ in_pcbbind(struct inpcb *inp, struct mbuf *nam, struct proc *p)
 }
 
 int
-in_pcbaddrisavail_lock(struct inpcb *inp, struct sockaddr_in *sin, int wild,
-    struct proc *p, int lock)
+in_pcbaddrisavail_lock(const struct inpcb *inp, struct sockaddr_in *sin,
+    int wild, struct proc *p, int lock)
 {
 	struct socket *so = inp->inp_socket;
 	struct inpcbtable *table = inp->inp_table;
@@ -436,8 +436,8 @@ in_pcbaddrisavail_lock(struct inpcb *inp, struct sockaddr_in *sin, int wild,
 }
 
 int
-in_pcbaddrisavail(struct inpcb *inp, struct sockaddr_in *sin, int wild,
-    struct proc *p)
+in_pcbaddrisavail(const struct inpcb *inp, struct sockaddr_in *sin,
+    int wild, struct proc *p)
 {
 	return in_pcbaddrisavail_lock(inp, sin, wild, p, IN_PCBLOCK_GRAB);
 }
@@ -517,7 +517,7 @@ in_pcbconnect(struct inpcb *inp, struct mbuf *nam)
 #ifdef INET6
 	if (ISSET(inp->inp_flags, INP_IPV6))
 		return (in6_pcbconnect(inp, nam));
-#endif /* INET6 */
+#endif
 
 	if ((error = in_nam2sin(nam, &sin)))
 		return (error);
@@ -652,6 +652,13 @@ in_setsockaddr(struct inpcb *inp, struct mbuf *nam)
 {
 	struct sockaddr_in *sin;
 
+#ifdef INET6
+	if (ISSET(inp->inp_flags, INP_IPV6)) {
+		in6_setsockaddr(inp, nam);
+		return;
+	}
+#endif
+
 	nam->m_len = sizeof(*sin);
 	sin = mtod(nam, struct sockaddr_in *);
 	memset(sin, 0, sizeof(*sin));
@@ -671,7 +678,7 @@ in_setpeeraddr(struct inpcb *inp, struct mbuf *nam)
 		in6_setpeeraddr(inp, nam);
 		return;
 	}
-#endif /* INET6 */
+#endif
 
 	nam->m_len = sizeof(*sin);
 	sin = mtod(nam, struct sockaddr_in *);
@@ -962,7 +969,7 @@ in_pcbselsrc(struct in_addr *insrc, struct sockaddr_in *sin,
 {
 	struct ip_moptions *mopts = inp->inp_moptions;
 	struct route *ro = &inp->inp_route;
-	struct in_addr *laddr = &inp->inp_laddr;
+	const struct in_addr *laddr = &inp->inp_laddr;
 	u_int rtableid = inp->inp_rtableid;
 	struct sockaddr	*ip4_source = NULL;
 
@@ -1305,6 +1312,10 @@ int
 in_pcbset_rtableid(struct inpcb *inp, u_int rtableid)
 {
 	struct inpcbtable *table = inp->inp_table;
+
+	/* table must exist */
+	if (!rtable_exists(rtableid))
+		return (EINVAL);
 
 	mtx_enter(&table->inpt_mtx);
 	if (inp->inp_lport) {

@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.279 2023/12/28 17:36:29 stsp Exp $
+# $OpenBSD: GENERIC,v 1.281 2024/01/22 18:54:01 kettenis Exp $
 #
 # GENERIC machine description file
 #
@@ -161,8 +161,12 @@ apldckbd*	at apldchidev?
 wskbd*		at apldckbd? mux 1
 apldcms*	at apldchidev?
 wsmouse*	at apldcms? mux 0
+apldcp*		at fdt?
 apldma*		at fdt?
 apldog*		at fdt? early 1
+apldrm*		at fdt?
+drm*		at apldrm?
+wsdisplay*	at apldrm?
 aplefuse*	at fdt? early 1
 apliic*		at fdt?
 iic*		at apliic?
@@ -390,6 +394,7 @@ vmx*		at pci?			# VMware VMXNET3 virtual interface
 # PCI WiFi
 athn*		at pci?			# Atheros AR9k (802.11a/g/n)
 bwfm*		at pci?			# Broadcom FullMAC
+iwn*		at pci?			# Intel WiFi Link 4965/5000/1000/6000
 iwx*		at pci?			# Intel WiFi Link 22xxx
 #qwx*		at pci?			# Qualcomm 802.11ax
 

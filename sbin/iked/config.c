@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.93 2023/08/04 19:06:25 claudio Exp $	*/
+/*	$OpenBSD: config.c,v 1.95 2024/01/17 08:25:02 claudio Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -611,16 +611,16 @@ config_getsocket(struct iked *env, struct imsg *imsg,
 {
 	struct iked_socket	*sock, **sock0 = NULL, **sock1 = NULL;
 
-	log_debug("%s: received socket fd %d", __func__, imsg->fd);
-
 	if ((sock = calloc(1, sizeof(*sock))) == NULL)
 		fatal("config_getsocket: calloc");
 
 	IMSG_SIZE_CHECK(imsg, &sock->sock_addr);
 
 	memcpy(&sock->sock_addr, imsg->data, sizeof(sock->sock_addr));
-	sock->sock_fd = imsg->fd;
+	sock->sock_fd = imsg_get_fd(imsg);
 	sock->sock_env = env;
+
+	log_debug("%s: received socket fd %d", __func__, sock->sock_fd);
 
 	switch (sock->sock_addr.ss_family) {
 	case AF_INET:
@@ -665,8 +665,10 @@ config_setpfkey(struct iked *env)
 int
 config_getpfkey(struct iked *env, struct imsg *imsg)
 {
-	log_debug("%s: received pfkey fd %d", __func__, imsg->fd);
-	pfkey_init(env, imsg->fd);
+	int fd = imsg_get_fd(imsg);
+
+	log_debug("%s: received pfkey fd %d", __func__, fd);
+	pfkey_init(env, fd);
 	return (0);
 }
 
@@ -900,6 +902,8 @@ config_setstatic(struct iked *env)
 {
 	proc_compose(&env->sc_ps, PROC_IKEV2, IMSG_CTL_STATIC,
 	    &env->sc_static, sizeof(env->sc_static));
+	proc_compose(&env->sc_ps, PROC_CERT, IMSG_CTL_STATIC,
+	    &env->sc_static, sizeof(env->sc_static));
 	return (0);
 }
 
@@ -981,28 +985,6 @@ config_getocsp(struct iked *env, struct imsg *imsg)
 	log_debug("%s: ocsp_url %s tolerate %ld maxage %ld", __func__,
 	    env->sc_ocsp_url ? env->sc_ocsp_url : "none",
 	    env->sc_ocsp_tolerate, env->sc_ocsp_maxage);
-	return (0);
-}
-
-int
-config_setcertpartialchain(struct iked *env)
-{
-	unsigned int boolval;
-
-	boolval = env->sc_cert_partial_chain;
-	proc_compose(&env->sc_ps, PROC_CERT, IMSG_CERT_PARTIAL_CHAIN,
-	    &boolval, sizeof(boolval));
-	return (0);
-}
-
-int
-config_getcertpartialchain(struct iked *env, struct imsg *imsg)
-{
-	unsigned int boolval;
-
-	IMSG_SIZE_CHECK(imsg, &boolval);
-	memcpy(&boolval, imsg->data, sizeof(boolval));
-	env->sc_cert_partial_chain = boolval;
 	return (0);
 }
 

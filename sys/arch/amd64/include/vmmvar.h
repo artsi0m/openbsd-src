@@ -1,4 +1,4 @@
-/*	$OpenBSD: vmmvar.h,v 1.96 2024/01/06 13:17:20 dv Exp $	*/
+/*	$OpenBSD: vmmvar.h,v 1.98 2024/01/20 20:11:24 mlarkin Exp $	*/
 /*
  * Copyright (c) 2014 Mike Larkin <mlarkin@openbsd.org>
  *
@@ -28,7 +28,7 @@
 #define VMM_MAX_NAME_LEN	64
 #define VMM_MAX_VCPUS		512
 #define VMM_MAX_VCPUS_PER_VM	64
-#define VMM_MAX_VM_MEM_SIZE	32L * 1024 * 1024 * 1024	/* 32 GiB */
+#define VMM_MAX_VM_MEM_SIZE	128L * 1024 * 1024 * 1024
 #define VMM_MAX_NICS_PER_VM	4
 
 #define VMM_PCI_MMIO_BAR_BASE	0xF0000000ULL
@@ -338,6 +338,7 @@ struct vm_exit_inout {
 	uint8_t			vei_encoding;	/* operand encoding */
 	uint16_t		vei_port;	/* port */
 	uint32_t		vei_data;	/* data */
+	uint8_t			vei_insn_len;	/* Count of instruction bytes */
 };
 /*
  *  vm_exit_eptviolation	: describes an EPT VIOLATION exit
