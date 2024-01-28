@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpctl.c,v 1.300 2024/01/18 14:46:21 claudio Exp $ */
+/*	$OpenBSD: bgpctl.c,v 1.302 2024/01/25 09:54:21 claudio Exp $ */
 
 /*
  * Copyright (c) 2003 Henning Brauer <henning@openbsd.org>
@@ -470,6 +470,7 @@ show(struct imsg *imsg, struct parse_result *res)
 	struct flowspec		 f;
 	struct ctl_show_rib	 rib;
 	struct rde_memstats	 stats;
+	struct ibuf		 ibuf;
 	u_char			*asdata;
 	u_int			 rescode, ilen;
 	size_t			 aslen;
@@ -539,14 +540,11 @@ show(struct imsg *imsg, struct parse_result *res)
 		output->rib(&rib, asdata, aslen, res);
 		break;
 	case IMSG_CTL_SHOW_RIB_COMMUNITIES:
-		ilen = imsg->hdr.len - IMSG_HEADER_SIZE;
-		if (ilen % sizeof(struct community)) {
-			warnx("bad IMSG_CTL_SHOW_RIB_COMMUNITIES received");
-			break;
-		}
 		if (output->communities == NULL)
 			break;
-		output->communities(imsg->data, ilen, res);
+		if (imsg_get_ibuf(imsg, &ibuf) == -1)
+			err(1, "imsg_get_ibuf");
+		output->communities(&ibuf, res);
 		break;
 	case IMSG_CTL_SHOW_RIB_ATTR:
 		ilen = imsg->hdr.len - IMSG_HEADER_SIZE;
@@ -1044,53 +1042,47 @@ fmt_large_community(uint32_t d1, uint32_t d2, uint32_t d3)
 }
 
 const char *
-fmt_ext_community(uint8_t *data)
+fmt_ext_community(uint64_t ext)
 {
 	static char	buf[32];
-	uint64_t	ext;
 	struct in_addr	ip;
 	uint32_t	as4, u32;
 	uint16_t	as2, u16;
 	uint8_t		type, subtype;
 
-	type = data[0];
-	subtype = data[1];
+	type = ext >> 56;
+	subtype = ext >> 48;
 
 	switch (type) {
 	case EXT_COMMUNITY_TRANS_TWO_AS:
 	case EXT_COMMUNITY_GEN_TWO_AS:
-		memcpy(&as2, data + 2, sizeof(as2));
-		memcpy(&u32, data + 4, sizeof(u32));
+		as2 = ext >> 32;
+		u32 = ext;
 		snprintf(buf, sizeof(buf), "%s %s:%u",
-		    log_ext_subtype(type, subtype),
-		    log_as(ntohs(as2)), ntohl(u32));
+		    log_ext_subtype(type, subtype), log_as(as2), u32);
 		return buf;
 	case EXT_COMMUNITY_TRANS_IPV4:
 	case EXT_COMMUNITY_GEN_IPV4:
-		memcpy(&ip, data + 2, sizeof(ip));
-		memcpy(&u16, data + 6, sizeof(u16));
+		ip.s_addr = htonl(ext >> 16);
+		u16 = ext;
 		snprintf(buf, sizeof(buf), "%s %s:%hu",
-		    log_ext_subtype(type, subtype),
-		    inet_ntoa(ip), ntohs(u16));
+		    log_ext_subtype(type, subtype), inet_ntoa(ip), u16);
 		return buf;
 	case EXT_COMMUNITY_TRANS_FOUR_AS:
 	case EXT_COMMUNITY_GEN_FOUR_AS:
-		memcpy(&as4, data + 2, sizeof(as4));
-		memcpy(&u16, data + 6, sizeof(u16));
+		as4 = ext >> 16;
+		u16 = ext;
 		snprintf(buf, sizeof(buf), "%s %s:%hu",
-		    log_ext_subtype(type, subtype),
-		    log_as(ntohl(as4)), ntohs(u16));
+		    log_ext_subtype(type, subtype), log_as(as4), u16);
 		return buf;
 	case EXT_COMMUNITY_TRANS_OPAQUE:
 	case EXT_COMMUNITY_TRANS_EVPN:
-		memcpy(&ext, data, sizeof(ext));
-		ext = be64toh(ext) & 0xffffffffffffLL;
+		ext &= 0xffffffffffffULL;
 		snprintf(buf, sizeof(buf), "%s 0x%llx",
 		    log_ext_subtype(type, subtype), (unsigned long long)ext);
 		return buf;
 	case EXT_COMMUNITY_NON_TRANS_OPAQUE:
-		memcpy(&ext, data, sizeof(ext));
-		ext = be64toh(ext) & 0xffffffffffffLL;
+		ext &= 0xffffffffffffULL;
 		if (subtype == EXT_COMMUNITY_SUBTYPE_OVS) {
 			switch (ext) {
 			case EXT_COMMUNITY_OVS_VALID:
@@ -1119,10 +1111,7 @@ fmt_ext_community(uint8_t *data)
 		}
 		break;
 	default:
-		memcpy(&ext, data, sizeof(ext));
-		snprintf(buf, sizeof(buf), "%s 0x%llx",
-		    log_ext_subtype(type, subtype),
-		    (unsigned long long)be64toh(ext));
+		snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)ext);
 		return buf;
 	}
 }
@@ -1709,118 +1698,85 @@ static void
 show_mrt_update(u_char *p, uint16_t len, int reqflags, int addpath)
 {
 	struct bgpd_addr prefix;
-	int pos;
+	struct ibuf *b, buf, wbuf, abuf;
 	uint32_t pathid;
 	uint16_t wlen, alen;
 	uint8_t prefixlen;
 
-	if (len < sizeof(wlen)) {
-		printf("bad length");
-		return;
-	}
-	memcpy(&wlen, p, sizeof(wlen));
-	wlen = ntohs(wlen);
-	p += sizeof(wlen);
-	len -= sizeof(wlen);
-
-	if (len < wlen) {
-		printf("bad withdraw length");
-		return;
-	}
+	ibuf_from_buffer(&buf, p, len);
+	b = &buf;
+	if (ibuf_get_n16(b, &wlen) == -1 ||
+	    ibuf_get_ibuf(b, wlen, &wbuf) == -1)
+		goto trunc;
 	if (wlen > 0) {
 		printf("\n     Withdrawn prefixes:");
-		while (wlen > 0) {
-			if (addpath) {
-				if (wlen <= sizeof(pathid)) {
-					printf("bad withdraw prefix");
-					return;
-				}
-				memcpy(&pathid, p, sizeof(pathid));
-				pathid = ntohl(pathid);
-				p += sizeof(pathid);
-				len -= sizeof(pathid);
-				wlen -= sizeof(pathid);
-			}
-			if ((pos = nlri_get_prefix(p, wlen, &prefix,
-			    &prefixlen)) == -1) {
-				printf("bad withdraw prefix");
-				return;
-			}
+		while (ibuf_size(&wbuf) > 0) {
+			if (addpath)
+				if (ibuf_get_n32(&wbuf, &pathid) == -1)
+					goto trunc;
+			if (nlri_get_prefix(&wbuf, &prefix, &prefixlen) == -1)
+				goto trunc;
+
 			printf(" %s/%u", log_addr(&prefix), prefixlen);
 			if (addpath)
 				printf(" path-id %u", pathid);
-			p += pos;
-			len -= pos;
-			wlen -= pos;
 		}
 	}
 
-	if (len < sizeof(alen)) {
-		printf("bad length");
-		return;
-	}
-	memcpy(&alen, p, sizeof(alen));
-	alen = ntohs(alen);
-	p += sizeof(alen);
-	len -= sizeof(alen);
+	if (ibuf_get_n16(b, &alen) == -1 ||
+	    ibuf_get_ibuf(b, alen, &abuf) == -1)
+		goto trunc;
 
-	if (len < alen) {
-		printf("bad attribute length");
-		return;
-	}
 	printf("\n");
 	/* alen attributes here */
-	while (alen > 3) {
-		uint8_t flags;
+	while (ibuf_size(&abuf) > 0) {
+		struct ibuf attrbuf;
 		uint16_t attrlen;
+		uint8_t flags;
 
-		flags = p[0];
-		/* type = p[1]; */
+		ibuf_from_ibuf(&abuf, &attrbuf);
+		if (ibuf_get_n8(&attrbuf, &flags) == -1 ||
+		    ibuf_skip(&attrbuf, 1) == -1)
+			goto trunc;
 
 		/* get the attribute length */
 		if (flags & ATTR_EXTLEN) {
-			if (len < sizeof(attrlen) + 2)
-				printf("bad attribute length");
-			memcpy(&attrlen, &p[2], sizeof(attrlen));
-			attrlen = ntohs(attrlen);
-			attrlen += sizeof(attrlen) + 2;
+			if (ibuf_get_n16(&attrbuf, &attrlen) == -1)
+				goto trunc;
 		} else {
-			attrlen = p[2];
-			attrlen += 1 + 2;
+			uint8_t tmp;
+			if (ibuf_get_n8(&attrbuf, &tmp) == -1)
+				goto trunc;
+			attrlen = tmp;
 		}
+		if (ibuf_truncate(&attrbuf, attrlen) == -1)
+			goto trunc;
+		ibuf_rewind(&attrbuf);
+		if (ibuf_skip(&abuf, ibuf_size(&attrbuf)) == -1)
+			goto trunc;
 
-		output->attr(p, attrlen, reqflags, addpath);
-		p += attrlen;
-		alen -= attrlen;
-		len -= attrlen;
+		output->attr(ibuf_data(&attrbuf), ibuf_size(&attrbuf),
+		    reqflags, addpath);
 	}
 
-	if (len > 0) {
+	if (ibuf_size(b) > 0) {
 		printf("    NLRI prefixes:");
-		while (len > 0) {
-			if (addpath) {
-				if (len <= sizeof(pathid)) {
-					printf(" bad nlri prefix: pathid, "
-					    "len %d", len);
-					return;
-				}
-				memcpy(&pathid, p, sizeof(pathid));
-				pathid = ntohl(pathid);
-				p += sizeof(pathid);
-				len -= sizeof(pathid);
-			}
-			if ((pos = nlri_get_prefix(p, len, &prefix,
-			    &prefixlen)) == -1) {
-				printf(" bad nlri prefix");
-				return;
-			}
+		while (ibuf_size(b) > 0) {
+			if (addpath)
+				if (ibuf_get_n32(b, &pathid) == -1)
+					goto trunc;
+			if (nlri_get_prefix(b, &prefix, &prefixlen) == -1)
+				goto trunc;
+
 			printf(" %s/%u", log_addr(&prefix), prefixlen);
 			if (addpath)
 				printf(" path-id %u", pathid);
-			p += pos;
-			len -= pos;
 		}
 	}
+	return;
+
+ trunc:
+	printf("truncated message");
 }
 
 void

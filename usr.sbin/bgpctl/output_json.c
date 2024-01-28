@@ -1,4 +1,4 @@
-/*	$OpenBSD: output_json.c,v 1.38 2024/01/11 13:09:41 claudio Exp $ */
+/*	$OpenBSD: output_json.c,v 1.40 2024/01/25 09:54:21 claudio Exp $ */
 
 /*
  * Copyright (c) 2020 Claudio Jeker <claudio@openbsd.org>
@@ -465,19 +465,17 @@ json_interface(struct ctl_show_interface *iface)
 }
 
 static void
-json_communities(u_char *data, size_t len, struct parse_result *res)
+json_communities(struct ibuf *data, struct parse_result *res)
 {
 	struct community c;
-	size_t  i;
 	uint64_t ext;
 
-	if (len % sizeof(c)) {
-		warnx("communities: bad size");
-		return;
-	}
 
-	for (i = 0; i < len; i += sizeof(c)) {
-		memcpy(&c, data + i, sizeof(c));
+	while (ibuf_size(data) != 0) {
+		if (ibuf_get(data, &c, sizeof(c)) == -1) {
+			warn("communities");
+			return;
+		}
 
 		switch (c.flags) {
 		case COMMUNITY_TYPE_BASIC:
@@ -505,11 +503,9 @@ json_communities(u_char *data, size_t len, struct parse_result *res)
 				ext |= (uint64_t)c.data2 & 0xffff;
 				break;
 			}
-			ext = htobe64(ext);
 
 			json_do_array("extended_communities");
-			json_do_string("community",
-			    fmt_ext_community((void *)&ext));
+			json_do_string("community", fmt_ext_community(ext));
 			break;
 		}
 	}
@@ -569,6 +565,7 @@ json_do_large_community(u_char *data, uint16_t len)
 static void
 json_do_ext_community(u_char *data, uint16_t len)
 {
+	uint64_t ext;
 	uint16_t i;
 
 	if (len & 0x7) {
@@ -578,8 +575,11 @@ json_do_ext_community(u_char *data, uint16_t len)
 
 	json_do_array("extended_communities");
 
-	for (i = 0; i < len; i += 8)
-		json_do_string("community", fmt_ext_community(data + i));
+	for (i = 0; i < len; i += 8) {
+		memcpy(&ext, data + i, sizeof(ext));
+		ext = be64toh(ext);
+		json_do_string("community", fmt_ext_community(ext));
+	}
 
 	json_do_end();
 }
@@ -589,12 +589,13 @@ json_attr(u_char *data, size_t len, int reqflags, int addpath)
 {
 	struct bgpd_addr prefix;
 	struct in_addr id;
+	struct ibuf ibuf, *buf = &ibuf;
 	char *aspath;
 	u_char *path;
 	uint32_t as, pathid;
 	uint16_t alen, afi, off, short_as;
 	uint8_t flags, type, safi, aid, prefixlen;
-	int e4, e2, pos;
+	int e4, e2;
 
 	if (len < 3) {
 		warnx("Too short BGP attribute");
@@ -780,48 +781,39 @@ bad_len:
 			json_do_string("nexthop", log_addr(&nexthop));
 		}
 
+		ibuf_from_buffer(buf, data, alen);
+
 		json_do_array("NLRI");
-		while (alen > 0) {
+		while (ibuf_size(buf) > 0) {
 			json_do_object("prefix", 1);
-			if (addpath) {
-				if (alen <= sizeof(pathid)) {
-					json_do_string("error", "bad path-id");
-					break;
-				}
-				memcpy(&pathid, data, sizeof(pathid));
-				pathid = ntohl(pathid);
-				data += sizeof(pathid);
-				alen -= sizeof(pathid);
-			}
+			if (addpath)
+				if (ibuf_get_n32(buf, &pathid) == -1)
+					goto bad_len;
 			switch (aid) {
 			case AID_INET6:
-				pos = nlri_get_prefix6(data, alen, &prefix,
-				    &prefixlen);
+				if (nlri_get_prefix6(buf, &prefix,
+				    &prefixlen) == -1)
+					goto bad_len;
 				break;
 			case AID_VPN_IPv4:
-				 pos = nlri_get_vpn4(data, alen, &prefix,
-				     &prefixlen, 1);
-				 break;
+				if (nlri_get_vpn4(buf, &prefix,
+				    &prefixlen, 1) == -1)
+					goto bad_len;
+				break;
 			case AID_VPN_IPv6:
-				 pos = nlri_get_vpn6(data, alen, &prefix,
-				     &prefixlen, 1);
-				 break;
+				if (nlri_get_vpn6(buf, &prefix,
+				    &prefixlen, 1) == -1)
+					goto bad_len;
+				break;
 			default:
 				json_do_printf("error", "unhandled AID: %d",
 				    aid);
 				return;
 			}
-			if (pos == -1) {
-				json_do_printf("error", "bad %s prefix",
-				    aid2str(aid));
-				break;
-			}
 			json_do_printf("prefix", "%s/%u", log_addr(&prefix),
 			    prefixlen);
 			if (addpath)
 				 json_do_uint("path_id", pathid);
-			data += pos;
-			alen -= pos;
 			json_do_end();
 		}
 		json_do_end();

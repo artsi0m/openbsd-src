@@ -2,6 +2,7 @@
 /* Copyright 2021 Alyssa Rosenzweig <alyssa@rosenzweig.io> */
 
 #include <linux/align.h>
+#include <linux/bitfield.h>
 #include <linux/bitmap.h>
 #include <linux/clk.h>
 #include <linux/completion.h>
@@ -273,7 +274,7 @@ static void dcpep_handle_cb(struct apple_dcp *dcp, enum dcp_context_id context,
 	out = in + hdr->in_len;
 
 	// TODO: verify that in_len and out_len match our prototypes
-	// for now just clear the out data to have at least consistant results
+	// for now just clear the out data to have at least consistent results
 	if (hdr->out_len)
 		memset(out, 0, hdr->out_len);
 
@@ -325,7 +326,7 @@ static void dcpep_got_msg(struct apple_dcp *dcp, u64 message)
 	channel_offset = dcp_channel_offset(ctx_id);
 
 	if (channel_offset < 0) {
-		dev_warn(dcp->dev, "invalid context received %u", ctx_id);
+		dev_warn(dcp->dev, "invalid context received %u\n", ctx_id);
 		return;
 	}
 
@@ -481,7 +482,7 @@ void dcp_flush(struct drm_crtc *crtc, struct drm_atomic_state *state)
 
 	if (dcp_channel_busy(&dcp->ch_cmd))
 	{
-		dev_err(dcp->dev, "unexpected busy command channel");
+		dev_err(dcp->dev, "unexpected busy command channel\n");
 		/* HACK: issue a delayed vblank event to avoid timeouts in
 		 * drm_atomic_helper_wait_for_vblanks().
 		 */

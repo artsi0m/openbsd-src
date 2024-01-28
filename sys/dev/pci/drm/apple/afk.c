@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only OR MIT
 /* Copyright 2022 Sven Peter <sven@svenpeter.dev> */
 
+#include <linux/bitfield.h>
 #include <linux/dma-mapping.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
@@ -136,7 +137,7 @@ static void afk_init_rxtx(struct apple_dcp_afkep *ep, u64 message,
 	u32 bufsz, end;
 
 	if (tag != ep->bfr_tag) {
-		dev_err(ep->dcp->dev, "AFK[ep:%02x]: expected tag 0x%x but got 0x%x",
+		dev_err(ep->dcp->dev, "AFK[ep:%02x]: expected tag 0x%x but got 0x%x\n",
 			ep->endpoint, ep->bfr_tag, tag);
 		return;
 	}
@@ -149,7 +150,7 @@ static void afk_init_rxtx(struct apple_dcp_afkep *ep, u64 message,
 
 	if (base >= ep->bfr_size) {
 		dev_err(ep->dcp->dev,
-			"AFK[ep:%02x]: requested base 0x%x >= max size 0x%lx",
+			"AFK[ep:%02x]: requested base 0x%x >= max size 0x%lx\n",
 			ep->endpoint, base, ep->bfr_size);
 		return;
 	}
@@ -157,7 +158,7 @@ static void afk_init_rxtx(struct apple_dcp_afkep *ep, u64 message,
 	end = base + size;
 	if (end > ep->bfr_size) {
 		dev_err(ep->dcp->dev,
-			"AFK[ep:%02x]: requested end 0x%x > max size 0x%lx",
+			"AFK[ep:%02x]: requested end 0x%x > max size 0x%lx\n",
 			ep->endpoint, end, ep->bfr_size);
 		return;
 	}
@@ -166,7 +167,7 @@ static void afk_init_rxtx(struct apple_dcp_afkep *ep, u64 message,
 	bufsz = le32_to_cpu(bfr->hdr->bufsz);
 	if (bufsz + sizeof(*bfr->hdr) != size) {
 		dev_err(ep->dcp->dev,
-			"AFK[ep:%02x]: ring buffer size 0x%x != expected 0x%lx",
+			"AFK[ep:%02x]: ring buffer size 0x%x != expected 0x%lx\n",
 			ep->endpoint, bufsz, sizeof(*bfr->hdr));
 		return;
 	}
@@ -236,7 +237,7 @@ static void afk_recv_handle_init(struct apple_dcp_afkep *ep, u32 channel,
 		return;
 	}
 
-	strlcpy(name, payload, sizeof(name));
+	strscpy(name, payload, sizeof(name));
 
 	/*
 	 * in DCP firmware 13.2 DCP reports interface-name as name which starts

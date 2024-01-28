@@ -1,4 +1,4 @@
-/*	$OpenBSD: btrace.c,v 1.81 2023/11/10 18:56:21 jasper Exp $ */
+/*	$OpenBSD: btrace.c,v 1.83 2024/01/25 20:50:58 mpi Exp $ */
 
 /*
  * Copyright (c) 2019 - 2023 Martin Pieuchot <mpi@openbsd.org>
@@ -797,13 +797,18 @@ const char *
 builtin_arg(struct dt_evt *dtev, enum bt_argtype dat)
 {
 	static char buf[sizeof("18446744073709551615")]; /* UINT64_MAX */
-	unsigned int argn;
+	struct dtioc_probe_info *dtpi;
 	struct dtioc_arg_info *dtai;
 	const char *argtype, *fmt;
+	unsigned int argn;
 	long value;
 
-	dtai = dt_args[dtev->dtev_pbn - 1];
 	argn = dat - B_AT_BI_ARG0;
+	dtpi = &dt_dtpis[dtev->dtev_pbn - 1];
+	if (dtpi == NULL || argn >= dtpi->dtpi_nargs)
+		return "0";
+
+	dtai = dt_args[dtev->dtev_pbn - 1];
 	argtype = dtai[argn].dtai_argtype;
 
 	if (strncmp(argtype, "int", DTNAMESIZE) == 0) {
@@ -1631,7 +1636,7 @@ ba2long(struct bt_arg *ba, struct dt_evt *dtev)
 		if (bv->bv_value == NULL)
 			return 0;
 		val = ba2long(map_get((struct map *)bv->bv_value,
-		    ba2str(ba->ba_key, dtev)), dtev);
+		    ba2hash(ba->ba_key, dtev)), dtev);
 		break;
 	case B_AT_NIL:
 		val = 0L;
@@ -1767,7 +1772,7 @@ ba2str(struct bt_arg *ba, struct dt_evt *dtev)
 			break;
 		}
 		str = ba2str(map_get((struct map *)bv->bv_value,
-		    ba2str(ba->ba_key, dtev)), dtev);
+		    ba2hash(ba->ba_key, dtev)), dtev);
 		break;
 	case B_AT_VAR:
 		str = ba2str(ba_read(ba), dtev);

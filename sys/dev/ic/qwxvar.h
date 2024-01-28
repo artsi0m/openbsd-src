@@ -1,4 +1,4 @@
-/*	$OpenBSD: qwxvar.h,v 1.1 2023/12/28 17:36:29 stsp Exp $	*/
+/*	$OpenBSD: qwxvar.h,v 1.5 2024/01/25 17:00:21 stsp Exp $	*/
 
 /*
  * Copyright (c) 2018-2019 The Linux Foundation.
@@ -69,12 +69,12 @@ struct ath11k_hw_ring_mask {
 #define ATH11K_FW_DIR			"qwx"
 
 #define ATH11K_BOARD_MAGIC		"QCA-ATH11K-BOARD"
-#define ATH11K_BOARD_API2_FILE		"board-2.bin"
-#define ATH11K_DEFAULT_BOARD_FILE	"board.bin"
-#define ATH11K_DEFAULT_CAL_FILE		"caldata.bin"
-#define ATH11K_AMSS_FILE		"amss.bin"
-#define ATH11K_M3_FILE			"m3.bin"
-#define ATH11K_REGDB_FILE		"regdb.bin"
+#define ATH11K_BOARD_API2_FILE		"board-2"
+#define ATH11K_DEFAULT_BOARD_FILE	"board"
+#define ATH11K_DEFAULT_CAL_FILE		"caldata"
+#define ATH11K_AMSS_FILE		"amss"
+#define ATH11K_M3_FILE			"m3"
+#define ATH11K_REGDB_FILE		"regdb"
 
 #define QWX_FW_BUILD_ID_MASK "QC_IMAGE_VERSION_STRING="
 
@@ -214,9 +214,9 @@ struct ath11k_hw_ops {
 #endif
 	void (*wmi_init_config)(struct qwx_softc *sc,
 	    struct target_resource_config *config);
-#if notyet
 	int (*mac_id_to_pdev_id)(struct ath11k_hw_params *hw, int mac_id);
 	int (*mac_id_to_srng_id)(struct ath11k_hw_params *hw, int mac_id);
+#if notyet
 	void (*tx_mesh_enable)(struct ath11k_base *ab,
 			       struct hal_tcl_data_cmd *tcl_cmd);
 	bool (*rx_desc_get_first_msdu)(struct hal_rx_desc *desc);
@@ -645,6 +645,13 @@ struct ath11k_hal {
 #endif
 };
 
+enum hal_pn_type {
+	HAL_PN_TYPE_NONE,
+	HAL_PN_TYPE_WPA,
+	HAL_PN_TYPE_WAPI_EVEN,
+	HAL_PN_TYPE_WAPI_UNEVEN,
+};
+
 enum hal_ce_desc {
 	HAL_CE_DESC_SRC,
 	HAL_CE_DESC_DST,
@@ -839,8 +846,9 @@ struct qwx_hp_update_timer {
 
 struct dp_rx_tid {
 	uint8_t tid;
+	struct qwx_dmamem *mem;
 	uint32_t *vaddr;
-	bus_addr_t paddr;
+	uint64_t paddr;
 	uint32_t size;
 	uint32_t ba_win_sz;
 	int active;
@@ -1267,6 +1275,177 @@ struct dp_rxdma_ring {
 	int bufs_max;
 };
 
+enum hal_rx_mon_status {
+	HAL_RX_MON_STATUS_PPDU_NOT_DONE,
+	HAL_RX_MON_STATUS_PPDU_DONE,
+	HAL_RX_MON_STATUS_BUF_DONE,
+};
+
+struct hal_rx_user_status {
+	uint32_t mcs:4,
+	nss:3,
+	ofdma_info_valid:1,
+	dl_ofdma_ru_start_index:7,
+	dl_ofdma_ru_width:7,
+	dl_ofdma_ru_size:8;
+	uint32_t ul_ofdma_user_v0_word0;
+	uint32_t ul_ofdma_user_v0_word1;
+	uint32_t ast_index;
+	uint32_t tid;
+	uint16_t tcp_msdu_count;
+	uint16_t udp_msdu_count;
+	uint16_t other_msdu_count;
+	uint16_t frame_control;
+	uint8_t frame_control_info_valid;
+	uint8_t data_sequence_control_info_valid;
+	uint16_t first_data_seq_ctrl;
+	uint32_t preamble_type;
+	uint16_t ht_flags;
+	uint16_t vht_flags;
+	uint16_t he_flags;
+	uint8_t rs_flags;
+	uint32_t mpdu_cnt_fcs_ok;
+	uint32_t mpdu_cnt_fcs_err;
+	uint32_t mpdu_fcs_ok_bitmap[8];
+	uint32_t mpdu_ok_byte_count;
+	uint32_t mpdu_err_byte_count;
+};
+
+#define HAL_INVALID_PEERID 0xffff
+#define VHT_SIG_SU_NSS_MASK 0x7
+
+#define HAL_RX_MAX_MCS 12
+#define HAL_RX_MAX_NSS 8
+
+#define HAL_TLV_STATUS_PPDU_NOT_DONE    HAL_RX_MON_STATUS_PPDU_NOT_DONE
+#define HAL_TLV_STATUS_PPDU_DONE        HAL_RX_MON_STATUS_PPDU_DONE
+#define HAL_TLV_STATUS_BUF_DONE         HAL_RX_MON_STATUS_BUF_DONE
+
+struct hal_rx_mon_ppdu_info {
+	uint32_t ppdu_id;
+	uint32_t ppdu_ts;
+	uint32_t num_mpdu_fcs_ok;
+	uint32_t num_mpdu_fcs_err;
+	uint32_t preamble_type;
+	uint16_t chan_num;
+	uint16_t tcp_msdu_count;
+	uint16_t tcp_ack_msdu_count;
+	uint16_t udp_msdu_count;
+	uint16_t other_msdu_count;
+	uint16_t peer_id;
+	uint8_t rate;
+	uint8_t mcs;
+	uint8_t nss;
+	uint8_t bw;
+	uint8_t vht_flag_values1;
+	uint8_t vht_flag_values2;
+	uint8_t vht_flag_values3[4];
+	uint8_t vht_flag_values4;
+	uint8_t vht_flag_values5;
+	uint16_t vht_flag_values6;
+	uint8_t is_stbc;
+	uint8_t gi;
+	uint8_t ldpc;
+	uint8_t beamformed;
+	uint8_t rssi_comb;
+	uint8_t rssi_chain_pri20[HAL_RX_MAX_NSS];
+	uint8_t tid;
+	uint16_t ht_flags;
+	uint16_t vht_flags;
+	uint16_t he_flags;
+	uint16_t he_mu_flags;
+	uint8_t dcm;
+	uint8_t ru_alloc;
+	uint8_t reception_type;
+	uint64_t tsft;
+	uint64_t rx_duration;
+	uint16_t frame_control;
+	uint32_t ast_index;
+	uint8_t rs_fcs_err;
+	uint8_t rs_flags;
+	uint8_t cck_flag;
+	uint8_t ofdm_flag;
+	uint8_t ulofdma_flag;
+	uint8_t frame_control_info_valid;
+	uint16_t he_per_user_1;
+	uint16_t he_per_user_2;
+	uint8_t he_per_user_position;
+	uint8_t he_per_user_known;
+	uint16_t he_flags1;
+	uint16_t he_flags2;
+	uint8_t he_RU[4];
+	uint16_t he_data1;
+	uint16_t he_data2;
+	uint16_t he_data3;
+	uint16_t he_data4;
+	uint16_t he_data5;
+	uint16_t he_data6;
+	uint32_t ppdu_len;
+	uint32_t prev_ppdu_id;
+	uint32_t device_id;
+	uint16_t first_data_seq_ctrl;
+	uint8_t monitor_direct_used;
+	uint8_t data_sequence_control_info_valid;
+	uint8_t ltf_size;
+	uint8_t rxpcu_filter_pass;
+	char rssi_chain[8][8];
+	struct hal_rx_user_status userstats;
+};
+
+enum dp_mon_status_buf_state {
+	/* PPDU id matches in dst ring and status ring */
+	DP_MON_STATUS_MATCH,
+	/* status ring dma is not done */
+	DP_MON_STATUS_NO_DMA,
+	/* status ring is lagging, reap status ring */
+	DP_MON_STATUS_LAG,
+	/* status ring is leading, reap dst ring and drop */
+	DP_MON_STATUS_LEAD,
+	/* replinish monitor status ring */
+	DP_MON_STATUS_REPLINISH,
+};
+
+struct qwx_pdev_mon_stats {
+	uint32_t status_ppdu_state;
+	uint32_t status_ppdu_start;
+	uint32_t status_ppdu_end;
+	uint32_t status_ppdu_compl;
+	uint32_t status_ppdu_start_mis;
+	uint32_t status_ppdu_end_mis;
+	uint32_t status_ppdu_done;
+	uint32_t dest_ppdu_done;
+	uint32_t dest_mpdu_done;
+	uint32_t dest_mpdu_drop;
+	uint32_t dup_mon_linkdesc_cnt;
+	uint32_t dup_mon_buf_cnt;
+	uint32_t dest_mon_stuck;
+	uint32_t dest_mon_not_reaped;
+};
+
+struct qwx_mon_data {
+	struct dp_link_desc_bank link_desc_banks[DP_LINK_DESC_BANKS_MAX];
+	struct hal_rx_mon_ppdu_info mon_ppdu_info;
+
+	uint32_t mon_ppdu_status;
+	uint32_t mon_last_buf_cookie;
+	uint64_t mon_last_linkdesc_paddr;
+	uint16_t chan_noise_floor;
+	bool hold_mon_dst_ring;
+	enum dp_mon_status_buf_state buf_state;
+	bus_addr_t mon_status_paddr;
+	struct dp_full_mon_mpdu *mon_mpdu;
+#ifdef notyet
+	struct hal_sw_mon_ring_entries sw_mon_entries;
+#endif
+	struct qwx_pdev_mon_stats rx_mon_stats;
+#ifdef notyet
+	/* lock for monitor data */
+	spinlock_t mon_lock;
+	struct sk_buff_head rx_status_q;
+#endif
+};
+
+
 #define MAX_RXDMA_PER_PDEV     2
 
 struct qwx_pdev_dp {
@@ -1285,8 +1464,8 @@ struct qwx_pdev_dp {
 	struct dp_rxdma_ring rx_mon_status_refill_ring[MAX_RXDMA_PER_PDEV];
 #if 0
 	struct ieee80211_rx_status rx_status;
-	struct ath11k_mon_data mon_data;
 #endif
+	struct qwx_mon_data mon_data;
 };
 
 struct qwx_vif {
@@ -1341,8 +1520,8 @@ struct qwx_vif {
 	bool wpaie_present;
 	bool bcca_zero_sent;
 	bool do_not_send_tmpl;
+	struct ieee80211_channel *chan;
 #if 0
-	struct ieee80211_chanctx_conf chanctx;
 	struct ath11k_arp_ns_offload arp_ns_offload;
 	struct ath11k_rekey_data rekey_data;
 #endif
@@ -1357,6 +1536,22 @@ struct qwx_survey_info {
 	int8_t noise;
 	uint64_t time;
 	uint64_t time_busy;
+};
+
+#define ATH11K_IRQ_NUM_MAX 52
+#define ATH11K_EXT_IRQ_NUM_MAX	16
+
+struct qwx_ext_irq_grp {
+	struct qwx_softc *sc;
+	uint32_t irqs[ATH11K_EXT_IRQ_NUM_MAX];
+	uint32_t num_irq;
+	uint32_t grp_id;
+	uint64_t timestamp;
+#if 0
+	bool napi_enabled;
+	struct napi_struct napi;
+	struct net_device napi_ndev;
+#endif
 };
 
 struct qwx_softc {
@@ -1410,6 +1605,8 @@ struct qwx_softc {
 	enum ath11k_crypt_mode		crypto_mode;
 	enum ath11k_hw_txrx_mode	frame_mode;
 
+	struct qwx_ext_irq_grp		ext_irq_grp[ATH11K_EXT_IRQ_GRP_NUM_MAX];
+
 	uint16_t			qmi_txn_id;
 	int				qmi_cal_done;
 	struct qwx_qmi_ce_cfg		qmi_ce_cfg;
@@ -1426,6 +1623,9 @@ struct qwx_softc {
 	uint32_t			allocated_vdev_map;
 	uint32_t			free_vdev_map;
 	int				num_peers;
+	int				peer_mapped;
+	int				peer_delete_done;
+	int				vdev_setup_done;
 
 	struct qwx_dbring_cap	*db_caps;
 	uint32_t		 num_db_cap;
@@ -1443,7 +1643,7 @@ struct qwx_softc {
 		uint32_t pdev_id;
 	} target_pdev_ids[MAX_RADIOS];
 	uint8_t target_pdev_count;
-	struct qwx_pdev *pdevs_active[MAX_RADIOS];
+	uint32_t pdevs_active;
 	int pdevs_macaddr_valid;
 	struct ath11k_hal_reg_capabilities_ext hal_reg_cap[MAX_RADIOS];
 
@@ -1470,15 +1670,19 @@ struct qwx_softc {
 	enum ath11k_hw_rev		sc_hw_rev;
 	struct qwx_device_id		id;
 	char				sc_bus_str[4]; /* "pci" or "ahb" */
+	int				num_msivec;
 	uint32_t			msi_addr_lo;
 	uint32_t			msi_addr_hi;
 	uint32_t			msi_data_start;
 	const struct qwx_msi_config	*msi_cfg;
+	uint32_t			msi_ce_irqmask;
 
 	struct qmi_wlanfw_request_mem_ind_msg_v01 *sc_req_mem_ind;
 };
 
-int	qwx_intr(struct qwx_softc *);
+int	qwx_ce_intr(void *);
+int	qwx_ext_intr(void *);
+int	qwx_dp_service_srng(struct qwx_softc *, int);
 
 int	qwx_init_hw_params(struct qwx_softc *);
 int	qwx_attach(struct qwx_softc *);
@@ -1495,8 +1699,46 @@ void	qwx_init_task(void *);
 int	qwx_newstate(struct ieee80211com *, enum ieee80211_state, int);
 void	qwx_newstate_task(void *);
 
+struct ath11k_peer {
+#if 0
+	struct list_head list;
+	struct ieee80211_sta *sta;
+#endif
+	int vdev_id;
+#if 0
+	u8 addr[ETH_ALEN];
+#endif
+	int peer_id;
+	uint16_t ast_hash;
+	uint8_t pdev_id;
+	uint16_t hw_peer_id;
+#if 0
+	/* protected by ab->data_lock */
+	struct ieee80211_key_conf *keys[WMI_MAX_KEY_INDEX + 1];
+#endif
+	struct dp_rx_tid rx_tid[IEEE80211_NUM_TID + 1];
+#if 0
+	/* peer id based rhashtable list pointer */
+	struct rhash_head rhash_id;
+	/* peer addr based rhashtable list pointer */
+	struct rhash_head rhash_addr;
+
+	/* Info used in MMIC verification of
+	 * RX fragments
+	 */
+	struct crypto_shash *tfm_mmic;
+	u8 mcast_keyidx;
+	u8 ucast_keyidx;
+	u16 sec_type;
+	u16 sec_type_grp;
+	bool is_authorized;
+	bool dp_setup_done;
+#endif
+};
+
 struct qwx_node {
 	struct ieee80211_node ni;
+	struct ath11k_peer peer;
 };
 
 struct ieee80211_node *qwx_node_alloc(struct ieee80211com *);
@@ -1506,6 +1748,7 @@ void	qwx_qrtr_recv_msg(struct qwx_softc *, struct mbuf *);
 int	qwx_hal_srng_init(struct qwx_softc *);
 
 int	qwx_ce_alloc_pipes(struct qwx_softc *);
+void	qwx_ce_free_pipes(struct qwx_softc *);
 void	qwx_ce_rx_post_buf(struct qwx_softc *);
 void	qwx_ce_get_shadow_config(struct qwx_softc *, uint32_t **, uint32_t *);
 
@@ -1520,4 +1763,12 @@ qwx_ce_get_attr_flags(struct qwx_softc *sc, int ce_id)
 {
 	KASSERT(ce_id < sc->hw_params.ce_count);
 	return sc->hw_params.host_ce_config[ce_id].flags;
+}
+
+static inline enum ieee80211_edca_ac qwx_tid_to_ac(uint32_t tid)
+{
+	return (((tid == 0) || (tid == 3)) ? EDCA_AC_BE :
+		((tid == 1) || (tid == 2)) ? EDCA_AC_BK :
+		((tid == 4) || (tid == 5)) ? EDCA_AC_VI :
+		EDCA_AC_VO);
 }

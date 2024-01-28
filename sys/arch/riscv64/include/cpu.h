@@ -1,4 +1,4 @@
-/*	$OpenBSD: cpu.h,v 1.19 2023/09/19 19:20:33 kettenis Exp $	*/
+/*	$OpenBSD: cpu.h,v 1.21 2024/01/27 12:05:40 kettenis Exp $	*/
 
 /*
  * Copyright (c) 2019 Mike Larkin <mlarkin@openbsd.org>
@@ -124,7 +124,7 @@ struct cpu_info {
 
 #ifdef GPROF
 	struct gmonparam	*ci_gmon;
-	struct clockintr	*ci_gmonclock;
+	struct clockintr	ci_gmonclock;
 #endif
 
 	char			ci_panicbuf[512];
@@ -266,6 +266,8 @@ intr_restore(u_long s)
 
 void	delay (unsigned);
 #define	DELAY(x)	delay(x)
+
+extern void (*cpu_startclock_fcn)(void);
 
 void fpu_save(struct proc *, struct trapframe *);
 void fpu_load(struct proc *);
