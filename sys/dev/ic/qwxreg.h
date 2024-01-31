@@ -1,4 +1,4 @@
-/*	$OpenBSD: qwxreg.h,v 1.2 2024/01/25 10:11:04 stsp Exp $	*/
+/*	$OpenBSD: qwxreg.h,v 1.4 2024/01/30 15:32:04 stsp Exp $	*/
 
 /*
  * Copyright (c) 2021-2022, Qualcomm Innovation Center, Inc.
@@ -3857,12 +3857,6 @@ struct wmi_scan_prob_req_oui_cmd {
 #define WMI_TX_PARAMS_DWORD1_FRAME_TYPE		BIT(20)
 #define WMI_TX_PARAMS_DWORD1_RSVD		GENMASK(31, 21)
 
-struct wmi_mgmt_send_params {
-	uint32_t tlv_header;
-	uint32_t tx_params_dword0;
-	uint32_t tx_params_dword1;
-};
-
 struct wmi_mgmt_send_cmd {
 	uint32_t tlv_header;
 	uint32_t vdev_id;
@@ -3874,9 +3868,13 @@ struct wmi_mgmt_send_cmd {
 	uint32_t buf_len;
 	uint32_t tx_params_valid;
 
-	/* This TLV is followed by struct wmi_mgmt_frame */
-
-	/* Followed by struct wmi_mgmt_send_params */
+	/*
+	 * Followed by struct wmi_tlv and buf_len bytes of frame data with
+	 * buf_len <= WMI_MGMT_SEND_DOWNLD_LEN, which may be exceeded by
+	 * frame_len. The full frame is mapped at paddr_lo/hi.
+	 * Presumably the idea is that small frames can skip the extra DMA
+	 * transfer of frame data after the command has been transferred.
+	 */
 } __packed;
 
 struct wmi_sta_powersave_mode_cmd {
@@ -9594,6 +9592,14 @@ enum hal_reo_exec_status {
 #define HAL_REO_STATUS_HDR_INFO0_STATUS_NUM	GENMASK(15, 0)
 #define HAL_REO_STATUS_HDR_INFO0_EXEC_TIME	GENMASK(25, 16)
 #define HAL_REO_STATUS_HDR_INFO0_EXEC_STATUS	GENMASK(27, 26)
+
+#define HAL_HASH_ROUTING_RING_TCL 0
+#define HAL_HASH_ROUTING_RING_SW1 1
+#define HAL_HASH_ROUTING_RING_SW2 2
+#define HAL_HASH_ROUTING_RING_SW3 3
+#define HAL_HASH_ROUTING_RING_SW4 4
+#define HAL_HASH_ROUTING_RING_REL 5
+#define HAL_HASH_ROUTING_RING_FW  6
 
 struct hal_reo_status_hdr {
 	uint32_t info0;

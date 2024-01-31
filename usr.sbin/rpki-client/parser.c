@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.108 2024/01/18 14:34:26 job Exp $ */
+/*	$OpenBSD: parser.c,v 1.113 2024/01/31 06:57:21 tb Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -258,20 +258,26 @@ parse_load_crl_from_mft(struct entity *entp, struct mft *mft, enum location loc,
  */
 static struct mft *
 proc_parser_mft_pre(struct entity *entp, enum location loc, char **file,
-    struct crl **crl, char **crlfile, const char **errstr)
+    struct crl **crl, char **crlfile, struct mft *cached_mft,
+    const char **errstr)
 {
 	struct mft	*mft;
 	X509		*x509;
 	struct auth	*a;
 	unsigned char	*der;
 	size_t		 len;
+	int		 issued_cmp, seqnum_cmp;
 
 	*crl = NULL;
 	*crlfile = NULL;
 	*errstr = NULL;
 
+	/* XXX - pull this into proc_parser_mft. */
 	*file = parse_filepath(entp->repoid, entp->path, entp->file, loc);
 	if (*file == NULL)
+		return NULL;
+
+	if (noop && loc == DIR_TEMP)
 		return NULL;
 
 	der = load_file(*file, &len);
@@ -293,21 +299,63 @@ proc_parser_mft_pre(struct entity *entp, enum location loc, char **file,
 		*crl = parse_load_crl_from_mft(entp, mft, DIR_VALID, crlfile);
 
 	a = valid_ski_aki(*file, &auths, mft->ski, mft->aki, NULL);
-	if (!valid_x509(*file, ctx, x509, a, *crl, errstr)) {
-		X509_free(x509);
-		mft_free(mft);
-		crl_free(*crl);
-		*crl = NULL;
-		free(*crlfile);
-		*crlfile = NULL;
-		return NULL;
-	}
+	if (!valid_x509(*file, ctx, x509, a, *crl, errstr))
+		goto err;
 	X509_free(x509);
+	x509 = NULL;
 
 	mft->repoid = entp->repoid;
 	mft->talid = a->cert->talid;
 
+	if (cached_mft == NULL)
+		return mft;
+
+	/*
+	 * Check that the cached manifest is older in the sense that it was
+	 * issued earlier and that it has a smaller sequence number.
+	 */
+
+	if ((issued_cmp = mft_compare_issued(mft, cached_mft)) < 0) {
+		warnx("%s: unexpected manifest issuance time (want >= %lld, "
+		    "got %lld)", *file, (long long)cached_mft->thisupdate,
+		    (long long)mft->thisupdate);
+		goto err;
+	}
+	if ((seqnum_cmp = mft_compare_seqnum(mft, cached_mft)) < 0) {
+		warnx("%s: unexpected manifest number (want >= #%s, got #%s)",
+		    *file, cached_mft->seqnum, mft->seqnum);
+		goto err;
+	}
+	if (issued_cmp > 0 && seqnum_cmp == 0) {
+		warnx("%s#%s: reissued manifest at %lld and %lld with same "
+		    "sequence number", *file, cached_mft->seqnum,
+		    (long long)mft->thisupdate,
+		    (long long)cached_mft->thisupdate);
+		goto err;
+	}
+	if (issued_cmp == 0 && seqnum_cmp > 0) {
+		warnx("%s#%s: reissued manifest same issuance time %lld as #%s",
+		    *file, mft->seqnum, (long long)mft->thisupdate,
+		    cached_mft->seqnum);
+		goto err;
+	}
+	if (issued_cmp == 0 && seqnum_cmp == 0 && memcmp(mft->mfthash,
+	    cached_mft->mfthash, SHA256_DIGEST_LENGTH) != 0) {
+		warnx("%s: manifest misissuance, #%s was recycled",
+		    *file, mft->seqnum);
+		goto err;
+	}
+
 	return mft;
+
+ err:
+	X509_free(x509);
+	mft_free(mft);
+	crl_free(*crl);
+	*crl = NULL;
+	free(*crlfile);
+	*crlfile = NULL;
+	return NULL;
 }
 
 /*
@@ -367,32 +415,22 @@ proc_parser_mft(struct entity *entp, struct mft **mp, char **crlfile,
 	struct crl	*crl, *crl1, *crl2;
 	char		*file, *file1, *file2, *crl1file, *crl2file;
 	const char	*err1, *err2;
-	int		 r, warned = 0;
+	int		 warned = 0;
 
 	*mp = NULL;
 	*crlmtime = 0;
 
-	mft1 = proc_parser_mft_pre(entp, DIR_TEMP, &file1, &crl1, &crl1file,
-	    &err1);
 	mft2 = proc_parser_mft_pre(entp, DIR_VALID, &file2, &crl2, &crl2file,
-	    &err2);
+	    NULL, &err2);
+	mft1 = proc_parser_mft_pre(entp, DIR_TEMP, &file1, &crl1, &crl1file,
+	    mft2, &err1);
 
 	/* overload error from temp file if it is set */
 	if (mft1 == NULL && mft2 == NULL)
-		if (err2 != NULL)
-			err1 = err2;
+		if (err1 != NULL)
+			err2 = err1;
 
-	r = mft_compare(mft1, mft2);
-	if (r == -1 && mft1 != NULL && mft2 != NULL)
-		warnx("%s: unexpected manifest number (want >= #%s, got #%s)",
-		    file1, mft2->seqnum, mft1->seqnum);
-
-	if (r == 0 && memcmp(mft1->mfthash, mft2->mfthash,
-	    SHA256_DIGEST_LENGTH) != 0)
-		warnx("%s: manifest misissuance, #%s was recycled",
-		    file1, mft1->seqnum);
-
-	if (!noop && r == 1) {
+	if (!noop && mft1 != NULL) {
 		*mp = proc_parser_mft_post(file1, mft1, entp->path, err1,
 		    &warned);
 		if (*mp == NULL) {

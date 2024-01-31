@@ -1,4 +1,4 @@
-/*	$OpenBSD: bgpctl.h,v 1.22 2024/01/25 09:54:21 claudio Exp $ */
+/*	$OpenBSD: bgpctl.h,v 1.24 2024/01/31 11:23:20 claudio Exp $ */
 
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
@@ -27,9 +27,9 @@ struct output {
 	void	(*flowspec)(struct flowspec *);
 	void	(*nexthop)(struct ctl_show_nexthop *);
 	void	(*interface)(struct ctl_show_interface *);
-	void	(*attr)(u_char *, size_t, int, int);
+	void	(*attr)(struct ibuf *, int, int);
 	void	(*communities)(struct ibuf *, struct parse_result *);
-	void	(*rib)(struct ctl_show_rib *, u_char *, size_t,
+	void	(*rib)(struct ctl_show_rib *, struct ibuf *,
 		    struct parse_result *);
 	void	(*rib_mem)(struct rde_memstats *);
 	void	(*set)(struct ctl_show_set *);

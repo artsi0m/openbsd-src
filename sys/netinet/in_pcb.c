@@ -1,4 +1,4 @@
-/*	$OpenBSD: in_pcb.c,v 1.286 2024/01/19 02:24:07 bluhm Exp $	*/
+/*	$OpenBSD: in_pcb.c,v 1.288 2024/01/31 12:27:57 bluhm Exp $	*/
 /*	$NetBSD: in_pcb.c,v 1.25 1996/02/13 23:41:53 christos Exp $	*/
 
 /*
@@ -720,18 +720,14 @@ in_peeraddr(struct socket *so, struct mbuf *nam)
  * any errors for each matching socket.
  */
 void
-in_pcbnotifyall(struct inpcbtable *table, struct sockaddr *dst, u_int rtable,
-    int errno, void (*notify)(struct inpcb *, int))
+in_pcbnotifyall(struct inpcbtable *table, const struct sockaddr_in *dst,
+    u_int rtable, int errno, void (*notify)(struct inpcb *, int))
 {
 	SIMPLEQ_HEAD(, inpcb) inpcblist;
 	struct inpcb *inp;
-	struct in_addr faddr;
 	u_int rdomain;
 
-	if (dst->sa_family != AF_INET)
-		return;
-	faddr = satosin(dst)->sin_addr;
-	if (faddr.s_addr == INADDR_ANY)
+	if (dst->sin_addr.s_addr == INADDR_ANY)
 		return;
 	if (notify == NULL)
 		return;
@@ -754,7 +750,7 @@ in_pcbnotifyall(struct inpcbtable *table, struct sockaddr *dst, u_int rtable,
 		if (ISSET(inp->inp_flags, INP_IPV6))
 			continue;
 #endif
-		if (inp->inp_faddr.s_addr != faddr.s_addr ||
+		if (inp->inp_faddr.s_addr != dst->sin_addr.s_addr ||
 		    rtable_l2(inp->inp_rtableid) != rdomain) {
 			continue;
 		}
@@ -913,6 +909,11 @@ in_pcbrtentry(struct inpcb *inp)
 {
 	struct route *ro;
 
+#ifdef INET6
+	if (ISSET(inp->inp_flags, INP_IPV6))
+		in6_pcbrtentry(inp);
+#endif
+
 	ro = &inp->inp_route;
 
 	/* check if route is still valid */
@@ -925,34 +926,16 @@ in_pcbrtentry(struct inpcb *inp)
 	 * No route yet, so try to acquire one.
 	 */
 	if (ro->ro_rt == NULL) {
-#ifdef INET6
-		memset(ro, 0, sizeof(struct route_in6));
-#else
 		memset(ro, 0, sizeof(struct route));
-#endif
 
-#ifdef INET6
-		if (ISSET(inp->inp_flags, INP_IPV6)) {
-			if (IN6_IS_ADDR_UNSPECIFIED(&inp->inp_faddr6))
-				return (NULL);
-			ro->ro_dst.sa_family = AF_INET6;
-			ro->ro_dst.sa_len = sizeof(struct sockaddr_in6);
-			satosin6(&ro->ro_dst)->sin6_addr = inp->inp_faddr6;
-			ro->ro_tableid = inp->inp_rtableid;
-			ro->ro_rt = rtalloc_mpath(&ro->ro_dst,
-			    &inp->inp_laddr6.s6_addr32[0], ro->ro_tableid);
-		} else
-#endif /* INET6 */
-		{
-			if (inp->inp_faddr.s_addr == INADDR_ANY)
-				return (NULL);
-			ro->ro_dst.sa_family = AF_INET;
-			ro->ro_dst.sa_len = sizeof(struct sockaddr_in);
-			satosin(&ro->ro_dst)->sin_addr = inp->inp_faddr;
-			ro->ro_tableid = inp->inp_rtableid;
-			ro->ro_rt = rtalloc_mpath(&ro->ro_dst,
-			    &inp->inp_laddr.s_addr, ro->ro_tableid);
-		}
+		if (inp->inp_faddr.s_addr == INADDR_ANY)
+			return (NULL);
+		ro->ro_dst.sa_family = AF_INET;
+		ro->ro_dst.sa_len = sizeof(struct sockaddr_in);
+		satosin(&ro->ro_dst)->sin_addr = inp->inp_faddr;
+		ro->ro_tableid = inp->inp_rtableid;
+		ro->ro_rt = rtalloc_mpath(&ro->ro_dst,
+		    &inp->inp_laddr.s_addr, ro->ro_tableid);
 	}
 	return (ro->ro_rt);
 }

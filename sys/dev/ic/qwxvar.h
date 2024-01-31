@@ -1,4 +1,4 @@
-/*	$OpenBSD: qwxvar.h,v 1.5 2024/01/25 17:00:21 stsp Exp $	*/
+/*	$OpenBSD: qwxvar.h,v 1.8 2024/01/30 15:32:04 stsp Exp $	*/
 
 /*
  * Copyright (c) 2018-2019 The Linux Foundation.
@@ -247,7 +247,9 @@ struct ath11k_hw_ops {
 	void (*rx_desc_set_msdu_len)(struct hal_rx_desc *desc, uint16_t len);
 	struct rx_attention *(*rx_desc_get_attention)(struct hal_rx_desc *desc);
 	uint8_t *(*rx_desc_get_msdu_payload)(struct hal_rx_desc *desc);
-	void (*reo_setup)(struct ath11k_base *ab);
+#endif
+	void (*reo_setup)(struct qwx_softc *);
+#ifdef notyet
 	uint16_t (*mpdu_info_get_peerid)(uint8_t *tlv_data);
 	bool (*rx_desc_mac_addr2_valid)(struct hal_rx_desc *desc);
 	uint8_t* (*rx_desc_mpdu_start_addr2)(struct hal_rx_desc *desc);
@@ -718,7 +720,7 @@ struct qwx_tx_data {
 	uint8_t eid;
 	uint8_t flags;
 	uint32_t cipher;
-} __packed;
+};
 
 struct qwx_ce_ring {
 	/* Number of entries in this ring; must be power of 2 */
@@ -1468,6 +1470,12 @@ struct qwx_pdev_dp {
 	struct qwx_mon_data mon_data;
 };
 
+struct qwx_txmgmt_queue {
+	struct qwx_tx_data data[8];
+	int cur;
+	int queued;
+};
+
 struct qwx_vif {
 	uint32_t vdev_id;
 	enum wmi_vdev_type vdev_type;
@@ -1528,6 +1536,8 @@ struct qwx_vif {
 #ifdef CONFIG_ATH11K_DEBUGFS
 	struct dentry *debugfs_twt;
 #endif /* CONFIG_ATH11K_DEBUGFS */
+
+	struct qwx_txmgmt_queue txmgmt;
 };
 
 TAILQ_HEAD(qwx_vif_list, qwx_vif);
@@ -1591,6 +1601,7 @@ struct qwx_softc {
 	int			have_firmware;
 
 	int			sc_tx_timer;
+	uint32_t		qfullmsk;
 
 	bus_addr_t			mem;
 	struct ath11k_hw_params		hw_params;
@@ -1626,6 +1637,7 @@ struct qwx_softc {
 	int				peer_mapped;
 	int				peer_delete_done;
 	int				vdev_setup_done;
+	int				peer_assoc_done;
 
 	struct qwx_dbring_cap	*db_caps;
 	uint32_t		 num_db_cap;
