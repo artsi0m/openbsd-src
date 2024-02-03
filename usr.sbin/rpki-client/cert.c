@@ -1,4 +1,4 @@
-/*	$OpenBSD: cert.c,v 1.122 2024/01/11 11:55:14 job Exp $ */
+/*	$OpenBSD: cert.c,v 1.124 2024/02/03 14:43:15 tb Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2021 Job Snijders <job@openbsd.org>
@@ -647,7 +647,7 @@ certificate_policies(struct parse *p, X509_EXTENSION *ext)
 
 	if ((nid = OBJ_obj2nid(qualifier->pqualid)) != NID_id_qt_cps) {
 		warnx("%s: RFC 7318 section 2: certificatePolicies: "
-		    "want CPS, got %d (%s)", p->fn, nid, OBJ_nid2sn(nid));
+		    "want CPS, got %s", p->fn, nid2str(nid));
 		goto out;
 	}
 
@@ -737,8 +737,7 @@ struct cert *
 cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 {
 	const unsigned char	*oder;
-	int			 extsz;
-	size_t			 i;
+	int			 i;
 	X509			*x = NULL;
 	X509_EXTENSION		*ext = NULL;
 	const X509_ALGOR	*palg;
@@ -794,8 +793,7 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 			warnx("%s: P-256 support is experimental", fn);
 	} else if (nid != NID_sha256WithRSAEncryption) {
 		warnx("%s: RFC 7935: wrong signature algorithm %s, want %s",
-		    fn, OBJ_nid2ln(nid),
-		    OBJ_nid2ln(NID_sha256WithRSAEncryption));
+		    fn, nid2str(nid), LN_sha256WithRSAEncryption);
 		goto out;
 	}
 
@@ -811,10 +809,7 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 
 	/* Look for X509v3 extensions. */
 
-	if ((extsz = X509_get_ext_count(x)) < 0)
-		errx(1, "X509_get_ext_count");
-
-	for (i = 0; i < (size_t)extsz; i++) {
+	for (i = 0; i < X509_get_ext_count(x); i++) {
 		ext = X509_get_ext(x, i);
 		assert(ext != NULL);
 		obj = X509_EXTENSION_get_object(ext);
@@ -943,7 +938,7 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 			    p.fn);
 			goto out;
 		}
-		for (i = 0; i < p.res->asz; i++) {
+		for (i = 0; (size_t)i < p.res->asz; i++) {
 			if (p.res->as[i].type == CERT_AS_INHERIT) {
 				warnx("%s: inherit elements not allowed in EE"
 				    " cert", p.fn);
@@ -970,8 +965,8 @@ cert_parse_pre(const char *fn, const unsigned char *der, size_t len)
 	return p.res;
 
  dup:
-	warnx("%s: RFC 5280 section 4.2: duplicate %s extension", fn,
-	    OBJ_nid2sn(nid));
+	warnx("%s: RFC 5280 section 4.2: duplicate extension: %s", fn,
+	    nid2str(nid));
  out:
 	cert_free(p.res);
 	X509_free(x);

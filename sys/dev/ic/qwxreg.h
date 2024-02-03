@@ -1,4 +1,4 @@
-/*	$OpenBSD: qwxreg.h,v 1.4 2024/01/30 15:32:04 stsp Exp $	*/
+/*	$OpenBSD: qwxreg.h,v 1.6 2024/02/03 10:03:18 stsp Exp $	*/
 
 /*
  * Copyright (c) 2021-2022, Qualcomm Innovation Center, Inc.
@@ -37,6 +37,16 @@
 /*
  * core.h
  */
+
+#define ATH11K_TX_MGMT_NUM_PENDING_MAX	512
+
+#define ATH11K_TX_MGMT_TARGET_MAX_SUPPORT_WMI 64
+
+/* Pending management packets threshold for dropping probe responses */
+#define ATH11K_PRB_RSP_DROP_THRESHOLD ((ATH11K_TX_MGMT_TARGET_MAX_SUPPORT_WMI * 3) / 4)
+
+#define ATH11K_INVALID_HW_MAC_ID	0xFF
+#define ATH11K_CONNECTION_LOSS_HZ	(3 * HZ)
 
 enum ath11k_hw_rev {
 	ATH11K_HW_IPQ8074,
@@ -10414,6 +10424,24 @@ enum rx_desc_sw_frame_grp_id {
 	RX_DESC_SW_FRAME_GRP_ID_CTRL_1111,
 	RX_DESC_SW_FRAME_GRP_ID_UNSUPPORTED,
 	RX_DESC_SW_FRAME_GRP_ID_PHY_ERR,
+};
+
+#define DP_MAX_NWIFI_HDR_LEN	30
+
+#define DP_RX_MPDU_ERR_FCS			BIT(0)
+#define DP_RX_MPDU_ERR_DECRYPT			BIT(1)
+#define DP_RX_MPDU_ERR_TKIP_MIC			BIT(2)
+#define DP_RX_MPDU_ERR_AMSDU_ERR		BIT(3)
+#define DP_RX_MPDU_ERR_OVERFLOW			BIT(4)
+#define DP_RX_MPDU_ERR_MSDU_LEN			BIT(5)
+#define DP_RX_MPDU_ERR_MPDU_LEN			BIT(6)
+#define DP_RX_MPDU_ERR_UNENCRYPTED_FRAME	BIT(7)
+
+enum dp_rx_decap_type {
+	DP_RX_DECAP_TYPE_RAW,
+	DP_RX_DECAP_TYPE_NATIVE_WIFI,
+	DP_RX_DECAP_TYPE_ETHERNET2_DIX,
+	DP_RX_DECAP_TYPE_8023,
 };
 
 enum rx_desc_decap_type {

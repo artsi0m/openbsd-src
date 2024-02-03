@@ -1,4 +1,4 @@
-/*	$OpenBSD: parser.c,v 1.113 2024/01/31 06:57:21 tb Exp $ */
+/*	$OpenBSD: parser.c,v 1.128 2024/02/03 14:30:47 job Exp $ */
 /*
  * Copyright (c) 2019 Claudio Jeker <claudio@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -169,6 +169,9 @@ proc_parser_mft_check(const char *fn, struct mft *p)
 	int	 rc = 1;
 	char	*path;
 
+	if (p == NULL)
+		return 0;
+
 	for (i = 0; i < p->filesz; i++) {
 		struct mftfile *m = &p->files[i];
 		int try, fd = -1, noent = 0, valid = 0;
@@ -251,42 +254,41 @@ parse_load_crl_from_mft(struct entity *entp, struct mft *mft, enum location loc,
 }
 
 /*
- * Parse and validate a manifest file. Skip checking the fileandhash
- * this is done in the post check. After this step we know the mft is
- * valid and can be compared.
- * Return the mft on success or NULL on failure.
+ * Parse and validate a manifest file.
+ * Don't check the fileandhash, this is done later on.
+ * Return the mft on success, or NULL on failure.
  */
 static struct mft *
-proc_parser_mft_pre(struct entity *entp, enum location loc, char **file,
-    struct crl **crl, char **crlfile, struct mft *cached_mft,
-    const char **errstr)
+proc_parser_mft_pre(struct entity *entp, char *file, struct crl **crl,
+    char **crlfile, struct mft *cached_mft, const char **errstr)
 {
 	struct mft	*mft;
 	X509		*x509;
 	struct auth	*a;
 	unsigned char	*der;
 	size_t		 len;
+	time_t		 now;
 	int		 issued_cmp, seqnum_cmp;
 
 	*crl = NULL;
 	*crlfile = NULL;
 	*errstr = NULL;
 
-	/* XXX - pull this into proc_parser_mft. */
-	*file = parse_filepath(entp->repoid, entp->path, entp->file, loc);
-	if (*file == NULL)
+	if (file == NULL)
 		return NULL;
 
-	if (noop && loc == DIR_TEMP)
-		return NULL;
-
-	der = load_file(*file, &len);
+	der = load_file(file, &len);
 	if (der == NULL && errno != ENOENT)
-		warn("parse file %s", *file);
+		warn("parse file %s", file);
 
-	if ((mft = mft_parse(&x509, *file, entp->talid, der, len)) == NULL) {
+	if ((mft = mft_parse(&x509, file, entp->talid, der, len)) == NULL) {
 		free(der);
 		return NULL;
+	}
+
+	if (entp->path != NULL) {
+		if ((mft->path = strdup(entp->path)) == NULL)
+			err(1, NULL);
 	}
 
 	if (!EVP_Digest(der, len, mft->mfthash, NULL, EVP_sha256(), NULL))
@@ -298,8 +300,8 @@ proc_parser_mft_pre(struct entity *entp, enum location loc, char **file,
 	if (*crl == NULL)
 		*crl = parse_load_crl_from_mft(entp, mft, DIR_VALID, crlfile);
 
-	a = valid_ski_aki(*file, &auths, mft->ski, mft->aki, NULL);
-	if (!valid_x509(*file, ctx, x509, a, *crl, errstr))
+	a = valid_ski_aki(file, &auths, mft->ski, mft->aki, NULL);
+	if (!valid_x509(file, ctx, x509, a, *crl, errstr))
 		goto err;
 	X509_free(x509);
 	x509 = NULL;
@@ -307,6 +309,21 @@ proc_parser_mft_pre(struct entity *entp, enum location loc, char **file,
 	mft->repoid = entp->repoid;
 	mft->talid = a->cert->talid;
 
+	now = get_current_time();
+	/* check that now is not before from */
+	if (now < mft->thisupdate) {
+		warnx("%s: manifest not yet valid %s", file,
+		    time2str(mft->thisupdate));
+		goto err;
+	}
+	/* check that now is not after until */
+	if (now > mft->nextupdate) {
+		warnx("%s: manifest expired on %s", file,
+		    time2str(mft->nextupdate));
+		goto err;
+	}
+
+	/* if there is nothing to compare to, return now */
 	if (cached_mft == NULL)
 		return mft;
 
@@ -316,33 +333,33 @@ proc_parser_mft_pre(struct entity *entp, enum location loc, char **file,
 	 */
 
 	if ((issued_cmp = mft_compare_issued(mft, cached_mft)) < 0) {
-		warnx("%s: unexpected manifest issuance time (want >= %lld, "
-		    "got %lld)", *file, (long long)cached_mft->thisupdate,
+		warnx("%s: unexpected manifest issuance date (want >= %lld, "
+		    "got %lld)", file, (long long)cached_mft->thisupdate,
 		    (long long)mft->thisupdate);
 		goto err;
 	}
 	if ((seqnum_cmp = mft_compare_seqnum(mft, cached_mft)) < 0) {
 		warnx("%s: unexpected manifest number (want >= #%s, got #%s)",
-		    *file, cached_mft->seqnum, mft->seqnum);
+		    file, cached_mft->seqnum, mft->seqnum);
 		goto err;
 	}
 	if (issued_cmp > 0 && seqnum_cmp == 0) {
-		warnx("%s#%s: reissued manifest at %lld and %lld with same "
-		    "sequence number", *file, cached_mft->seqnum,
-		    (long long)mft->thisupdate,
-		    (long long)cached_mft->thisupdate);
+		warnx("%s: manifest issued at %lld and %lld with same "
+		    "manifest number #%s", file, (long long)mft->thisupdate,
+		    (long long)cached_mft->thisupdate, cached_mft->seqnum);
 		goto err;
 	}
 	if (issued_cmp == 0 && seqnum_cmp > 0) {
-		warnx("%s#%s: reissued manifest same issuance time %lld as #%s",
-		    *file, mft->seqnum, (long long)mft->thisupdate,
-		    cached_mft->seqnum);
+		warnx("%s: #%s and #%s were issued at same issuance date %lld",
+		    file, mft->seqnum, cached_mft->seqnum,
+		    (long long)mft->thisupdate);
 		goto err;
 	}
 	if (issued_cmp == 0 && seqnum_cmp == 0 && memcmp(mft->mfthash,
 	    cached_mft->mfthash, SHA256_DIGEST_LENGTH) != 0) {
-		warnx("%s: manifest misissuance, #%s was recycled",
-		    *file, mft->seqnum);
+		warnx("%s: misissuance, issuance date %lld and manifest number "
+		    "#%s were recycled", file, (long long)mft->thisupdate,
+		    mft->seqnum);
 		goto err;
 	}
 
@@ -359,52 +376,6 @@ proc_parser_mft_pre(struct entity *entp, enum location loc, char **file,
 }
 
 /*
- * Do the end of manifest validation.
- * Return the mft on success or NULL on failure.
- */
-static struct mft *
-proc_parser_mft_post(char *file, struct mft *mft, const char *path,
-    const char *errstr, int *warned)
-{
-	/* check that now is not before from */
-	time_t now = get_current_time();
-
-	if (mft == NULL) {
-		if (errstr == NULL)
-			errstr = "no valid mft available";
-		if ((*warned)++ > 0)
-			return NULL;
-		warnx("%s: %s", file, errstr);
-		return NULL;
-	}
-
-	/* check that now is not before from */
-	if (now < mft->thisupdate) {
-		warnx("%s: mft not yet valid %s", file,
-		    time2str(mft->thisupdate));
-		mft->stale = 1;
-	}
-	/* check that now is not after until */
-	if (now > mft->nextupdate) {
-		warnx("%s: mft expired on %s", file,
-		    time2str(mft->nextupdate));
-		mft->stale = 1;
-	}
-
-	if (path != NULL)
-		if ((mft->path = strdup(path)) == NULL)
-			err(1, NULL);
-
-	if (!mft->stale)
-		if (!proc_parser_mft_check(file, mft)) {
-			mft_free(mft);
-			return NULL;
-		}
-
-	return mft;
-}
-
-/*
  * Load the most recent MFT by opening both options and comparing the two.
  */
 static char *
@@ -412,55 +383,56 @@ proc_parser_mft(struct entity *entp, struct mft **mp, char **crlfile,
     time_t *crlmtime)
 {
 	struct mft	*mft1 = NULL, *mft2 = NULL;
-	struct crl	*crl, *crl1, *crl2;
-	char		*file, *file1, *file2, *crl1file, *crl2file;
-	const char	*err1, *err2;
-	int		 warned = 0;
+	struct crl	*crl, *crl1 = NULL, *crl2 = NULL;
+	char		*file, *file1 = NULL, *file2 = NULL;
+	char		*crl1file = NULL, *crl2file = NULL;
+	const char	*err1 = NULL, *err2 = NULL;
 
 	*mp = NULL;
 	*crlmtime = 0;
 
-	mft2 = proc_parser_mft_pre(entp, DIR_VALID, &file2, &crl2, &crl2file,
-	    NULL, &err2);
-	mft1 = proc_parser_mft_pre(entp, DIR_TEMP, &file1, &crl1, &crl1file,
-	    mft2, &err1);
+	file2 = parse_filepath(entp->repoid, entp->path, entp->file, DIR_VALID);
+	mft2 = proc_parser_mft_pre(entp, file2, &crl2, &crl2file, NULL, &err2);
 
-	/* overload error from temp file if it is set */
-	if (mft1 == NULL && mft2 == NULL)
-		if (err1 != NULL)
-			err2 = err1;
-
-	if (!noop && mft1 != NULL) {
-		*mp = proc_parser_mft_post(file1, mft1, entp->path, err1,
-		    &warned);
-		if (*mp == NULL) {
-			mft1 = NULL;
-			if (mft2 != NULL)
-				warnx("%s: failed fetch, continuing with #%s"
-				    " from cache", file2, mft2->seqnum);
-		}
+	if (!noop) {
+		file1 = parse_filepath(entp->repoid, entp->path, entp->file,
+		    DIR_TEMP);
+		mft1 = proc_parser_mft_pre(entp, file1, &crl1, &crl1file, mft2,
+		    &err1);
 	}
 
-	if (*mp != NULL) {
+	if (proc_parser_mft_check(file1, mft1)) {
 		mft_free(mft2);
 		crl_free(crl2);
 		free(crl2file);
 		free(file2);
 
+		*mp = mft1;
 		crl = crl1;
 		file = file1;
 		*crlfile = crl1file;
 	} else {
-		if (err2 == NULL)
-			err2 = err1;
-		*mp = proc_parser_mft_post(file2, mft2, entp->path, err2,
-		    &warned);
+		if (mft1 != NULL && mft2 != NULL)
+			warnx("%s: failed fetch, continuing with #%s "
+			    "from cache", file2, mft2->seqnum);
+
+		if (!proc_parser_mft_check(file2, mft2)) {
+			mft_free(mft2);
+			mft2 = NULL;
+
+			if (err2 == NULL)
+				err2 = err1;
+			if (err2 == NULL)
+				err2 = "no valid manifest available";
+			warnx("%s: %s", file2, err2);
+		}
 
 		mft_free(mft1);
 		crl_free(crl1);
 		free(crl1file);
 		free(file1);
 
+		*mp = mft2;
 		crl = crl2;
 		file = file2;
 		*crlfile = crl2file;

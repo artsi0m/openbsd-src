@@ -1,4 +1,4 @@
-/*	$OpenBSD: rde.c,v 1.620 2024/01/30 13:50:09 claudio Exp $ */
+/*	$OpenBSD: rde.c,v 1.622 2024/02/03 00:11:34 jsg Exp $ */
 
 /*
  * Copyright (c) 2003, 2004 Henning Brauer <henning@openbsd.org>
@@ -2484,7 +2484,7 @@ rde_update_err(struct rde_peer *peer, uint8_t error, uint8_t suberr,
 		fatal("%s %d imsg_add error", __func__, __LINE__);
 	if (opt != NULL)
 		if (ibuf_add_ibuf(wbuf, opt) == -1)
-			fatal("%s %d imsg_add error", __func__, __LINE__);
+			fatal("%s %d ibuf_add_ibuf error", __func__, __LINE__);
 	imsg_close(ibuf_se, wbuf);
 	peer->state = PEER_ERR;
 }
@@ -4244,8 +4244,7 @@ rde_peer_send_eor(struct rde_peer *peer, uint8_t aid)
 
 		if (imsg_compose(ibuf_se, IMSG_UPDATE, peer->conf.id,
 		    0, -1, &buf, 10) == -1)
-			fatal("%s %d imsg_compose error in peer_send_eor",
-			    __func__, __LINE__);
+			fatal("%s %d imsg_compose error", __func__, __LINE__);
 	}
 
 	log_peer_info(&peer->conf, "sending %s EOR marker",
@@ -4274,6 +4273,7 @@ rde_peer_send_rrefresh(struct rde_peer *peer, uint8_t aid, uint8_t subtype)
 
 	if (imsg_compose(ibuf_se, IMSG_REFRESH, peer->conf.id, 0, -1,
 	    &rr, sizeof(rr)) == -1)
+		fatal("%s %d imsg_compose error", __func__, __LINE__);
 
 	log_peer_info(&peer->conf, "sending %s %s marker",
 	    aid2str(aid), subtype == ROUTE_REFRESH_END_RR ? "EoRR" : "BoRR");

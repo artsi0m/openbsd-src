@@ -1,4 +1,4 @@
-/*	$OpenBSD: mft.c,v 1.102 2024/01/31 06:57:21 tb Exp $ */
+/*	$OpenBSD: mft.c,v 1.104 2024/02/03 14:30:47 job Exp $ */
 /*
  * Copyright (c) 2022 Theo Buehler <tb@openbsd.org>
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -301,16 +301,6 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p)
 	if (p->res->seqnum == NULL)
 		goto out;
 
-	/*
-	 * Timestamps: this and next update time.
-	 * Validate that the current date falls into this interval.
-	 * This is required by section 4.4, (3).
-	 * If we're after the given date, then the MFT is stale.
-	 * This is made super complicated because it uses OpenSSL's
-	 * ASN1_GENERALIZEDTIME instead of ASN1_TIME, which we could
-	 * compare against the current time trivially.
-	 */
-
 	if (!mft_parse_time(mft->thisUpdate, mft->nextUpdate, p))
 		goto out;
 
@@ -352,10 +342,7 @@ mft_parse_econtent(const unsigned char *d, size_t dsz, struct parse *p)
 
 /*
  * Parse the objects that have been published in the manifest.
- * This conforms to RFC 6486.
- * Note that if the MFT is stale, all referenced objects are stripped
- * from the parsed content.
- * The MFT content is otherwise returned.
+ * Return mft if it conforms to RFC 6486, otherwise NULL.
  */
 struct mft *
 mft_parse(X509 **x509, const char *fn, int talid, const unsigned char *der,
@@ -486,7 +473,6 @@ mft_buffer(struct ibuf *b, const struct mft *p)
 {
 	size_t		 i;
 
-	io_simple_buffer(b, &p->stale, sizeof(p->stale));
 	io_simple_buffer(b, &p->repoid, sizeof(p->repoid));
 	io_simple_buffer(b, &p->talid, sizeof(p->talid));
 	io_str_buffer(b, p->path);
@@ -519,7 +505,6 @@ mft_read(struct ibuf *b)
 	if ((p = calloc(1, sizeof(struct mft))) == NULL)
 		err(1, NULL);
 
-	io_read_buf(b, &p->stale, sizeof(p->stale));
 	io_read_buf(b, &p->repoid, sizeof(p->repoid));
 	io_read_buf(b, &p->talid, sizeof(p->talid));
 	io_read_str(b, &p->path);

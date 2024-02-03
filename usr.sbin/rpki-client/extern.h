@@ -1,4 +1,4 @@
-/*	$OpenBSD: extern.h,v 1.201 2024/01/31 06:57:21 tb Exp $ */
+/*	$OpenBSD: extern.h,v 1.203 2024/02/03 14:30:47 job Exp $ */
 /*
  * Copyright (c) 2019 Kristaps Dzonsons <kristaps@bsd.lv>
  *
@@ -219,7 +219,6 @@ struct mft {
 	size_t		 filesz; /* number of filenames */
 	unsigned int	 repoid;
 	int		 talid;
-	int		 stale; /* if a stale manifest */
 };
 
 /*
@@ -527,7 +526,6 @@ enum stype {
 	STYPE_OK,
 	STYPE_FAIL,
 	STYPE_INVALID,
-	STYPE_STALE,
 	STYPE_BGPSEC,
 	STYPE_TOTAL,
 	STYPE_UNIQUE,
@@ -548,7 +546,6 @@ struct repotalstats {
 	uint32_t	 certs_fail; /* invalid certificate */
 	uint32_t	 mfts; /* total number of manifests */
 	uint32_t	 mfts_fail; /* failing syntactic parse */
-	uint32_t	 mfts_stale; /* stale manifests */
 	uint32_t	 roas; /* route origin authorizations */
 	uint32_t	 roas_fail; /* failing syntactic parse */
 	uint32_t	 roas_invalid; /* invalid resources */
@@ -861,6 +858,7 @@ int		 x509_valid_subject(const char *, const X509 *);
 time_t		 x509_find_expires(time_t, struct auth *, struct crl_tree *);
 
 /* printers */
+char		*nid2str(int);
 char		*time2str(time_t);
 void		 x509_print(const X509 *);
 void		 tal_print(const struct tal *);
