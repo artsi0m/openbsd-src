@@ -1,4 +1,4 @@
-/* $OpenBSD: cmac.c,v 1.22 2024/01/30 17:43:39 tb Exp $ */
+/* $OpenBSD: cmac.c,v 1.24 2024/05/20 14:53:37 tb Exp $ */
 /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
  * project.
  */
@@ -182,7 +182,7 @@ int
 CMAC_Init(CMAC_CTX *ctx, const void *key, size_t keylen,
     const EVP_CIPHER *cipher, ENGINE *impl)
 {
-	static unsigned char zero_iv[EVP_MAX_BLOCK_LENGTH];
+	static const unsigned char zero_iv[EVP_MAX_BLOCK_LENGTH];
 	int block_size;
 
 	/* All zeros means restart */
@@ -323,18 +323,3 @@ CMAC_Final(CMAC_CTX *ctx, unsigned char *out, size_t *poutlen)
 	return 1;
 }
 LCRYPTO_ALIAS(CMAC_Final);
-
-int
-CMAC_resume(CMAC_CTX *ctx)
-{
-	if (ctx->nlast_block == -1)
-		return 0;
-	/* The buffer "tbl" containes the last fully encrypted block
-	 * which is the last IV (or all zeroes if no last encrypted block).
-	 * The last block has not been modified since CMAC_final().
-	 * So reinitialising using the last decrypted block will allow
-	 * CMAC to continue after calling CMAC_Final().
-	 */
-	return EVP_EncryptInit_ex(ctx->cipher_ctx, NULL, NULL, NULL, ctx->tbl);
-}
-LCRYPTO_ALIAS(CMAC_resume);

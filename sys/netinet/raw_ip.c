@@ -1,4 +1,4 @@
-/*	$OpenBSD: raw_ip.c,v 1.154 2024/01/21 01:17:20 bluhm Exp $	*/
+/*	$OpenBSD: raw_ip.c,v 1.159 2024/04/17 20:48:51 bluhm Exp $	*/
 /*	$NetBSD: raw_ip.c,v 1.25 1996/02/18 18:58:33 christos Exp $	*/
 
 /*
@@ -108,6 +108,7 @@ const struct pr_usrreqs rip_usrreqs = {
 	.pru_detach	= rip_detach,
 	.pru_lock	= rip_lock,
 	.pru_unlock	= rip_unlock,
+	.pru_locked	= rip_locked,
 	.pru_bind	= rip_bind,
 	.pru_connect	= rip_connect,
 	.pru_disconnect	= rip_disconnect,
@@ -126,8 +127,6 @@ rip_init(void)
 {
 	in_pcbinit(&rawcbtable, 1);
 }
-
-struct mbuf	*rip_chkhdr(struct mbuf *, struct mbuf *);
 
 int
 rip_input(struct mbuf **mp, int *offp, int proto, int af)
@@ -173,7 +172,13 @@ rip_input(struct mbuf **mp, int *offp, int proto, int af)
 	TAILQ_FOREACH(inp, &rawcbtable.inpt_queue, inp_queue) {
 		KASSERT(!ISSET(inp->inp_flags, INP_IPV6));
 
-		if (inp->inp_socket->so_rcv.sb_state & SS_CANTRCVMORE)
+		/*
+		 * Packet must not be inserted after disconnected wakeup
+		 * call.  To avoid race, check again when holding receive
+		 * buffer mutex.
+		 */
+		if (ISSET(READ_ONCE(inp->inp_socket->so_rcv.sb_state),
+		    SS_CANTRCVMORE))
 			continue;
 		if (rtable_l2(inp->inp_rtableid) !=
 		    rtable_l2(m->m_pkthdr.ph_rtableid))
@@ -219,24 +224,27 @@ rip_input(struct mbuf **mp, int *offp, int proto, int af)
 		else
 			n = m_copym(m, 0, M_COPYALL, M_NOWAIT);
 		if (n != NULL) {
-			int ret;
+			struct socket *so = inp->inp_socket;
+			int ret = 0;
 
 			if (inp->inp_flags & INP_CONTROLOPTS ||
-			    inp->inp_socket->so_options & SO_TIMESTAMP)
+			    so->so_options & SO_TIMESTAMP)
 				ip_savecontrol(inp, &opts, ip, n);
 
-			mtx_enter(&inp->inp_mtx);
-			ret = sbappendaddr(inp->inp_socket,
-			    &inp->inp_socket->so_rcv,
-			    sintosa(&ripsrc), n, opts);
-			mtx_leave(&inp->inp_mtx);
+			mtx_enter(&so->so_rcv.sb_mtx);
+			if (!ISSET(inp->inp_socket->so_rcv.sb_state,
+			    SS_CANTRCVMORE)) {
+				ret = sbappendaddr(so, &so->so_rcv,
+				    sintosa(&ripsrc), n, opts);
+			}
+			mtx_leave(&so->so_rcv.sb_mtx);
 
 			if (ret == 0) {
-				/* should notify about lost packet */
 				m_freem(n);
 				m_freem(opts);
+				ipstat_inc(ips_noproto);
 			} else
-				sorwakeup(inp->inp_socket);
+				sorwakeup(so);
 		}
 		in_pcbunref(inp);
 	}
@@ -324,7 +332,7 @@ rip_output(struct mbuf *m, struct socket *so, struct sockaddr *dstaddr,
 #endif
 
 	error = ip_output(m, inp->inp_options, &inp->inp_route, flags,
-	    inp->inp_moptions, inp->inp_seclevel, 0);
+	    inp->inp_moptions, &inp->inp_seclevel, 0);
 	return (error);
 }
 
@@ -522,6 +530,14 @@ rip_unlock(struct socket *so)
 
 	NET_ASSERT_LOCKED();
 	mtx_leave(&inp->inp_mtx);
+}
+
+int
+rip_locked(struct socket *so)
+{
+	struct inpcb *inp = sotoinpcb(so);
+
+	return mtx_owned(&inp->inp_mtx);
 }
 
 int

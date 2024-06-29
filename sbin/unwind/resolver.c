@@ -1,4 +1,4 @@
-/*	$OpenBSD: resolver.c,v 1.163 2023/12/14 09:59:27 claudio Exp $	*/
+/*	$OpenBSD: resolver.c,v 1.166 2024/05/21 05:00:48 jsg Exp $	*/
 
 
 /*
@@ -181,8 +181,6 @@ void			 show_status(pid_t);
 void			 show_autoconf(pid_t);
 void			 show_mem(pid_t);
 void			 send_resolver_info(struct uw_resolver *, pid_t);
-void			 send_detailed_resolver_info(struct uw_resolver *,
-			     pid_t);
 void			 trust_anchor_resolve(void);
 void			 trust_anchor_timo(int, short, void *);
 void			 trust_anchor_resolve_done(struct uw_resolver *, void *,
@@ -236,6 +234,20 @@ static const char * const	 forward_transparent_zones[] = {
 	/* RFC1918 */
 	"10.in-addr.arpa. transparent",
 	"16.172.in-addr.arpa. transparent",
+	"17.172.in-addr.arpa. transparent",
+	"18.172.in-addr.arpa. transparent",
+	"19.172.in-addr.arpa. transparent",
+	"20.172.in-addr.arpa. transparent",
+	"21.172.in-addr.arpa. transparent",
+	"22.172.in-addr.arpa. transparent",
+	"23.172.in-addr.arpa. transparent",
+	"24.172.in-addr.arpa. transparent",
+	"25.172.in-addr.arpa. transparent",
+	"26.172.in-addr.arpa. transparent",
+	"27.172.in-addr.arpa. transparent",
+	"28.172.in-addr.arpa. transparent",
+	"29.172.in-addr.arpa. transparent",
+	"30.172.in-addr.arpa. transparent",
 	"31.172.in-addr.arpa. transparent",
 	"168.192.in-addr.arpa. transparent",
 
@@ -1197,6 +1209,7 @@ static const struct {
 	{ "target-fetch-policy:", "0 0 0 0 0" },
 	{ "outgoing-range:", "64" },
 	{ "val-max-restart:", "0" },
+	{ "infra-keep-probing", "yes" },
 };
 
 struct uw_resolver *

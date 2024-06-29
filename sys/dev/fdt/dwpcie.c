@@ -1,4 +1,4 @@
-/*	$OpenBSD: dwpcie.c,v 1.51 2024/02/03 10:37:26 kettenis Exp $	*/
+/*	$OpenBSD: dwpcie.c,v 1.53 2024/03/29 12:45:13 kettenis Exp $	*/
 /*
  * Copyright (c) 2018 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -676,7 +676,7 @@ dwpcie_attach_deferred(struct device *self)
 		pmembase = sc->sc_pmem_bus_addr;
 		pmemlimit = pmembase + sc->sc_pmem_size - 1;
 		blr = pmemlimit & PPB_MEM_MASK;
-		blr |= (pmembase >> PPB_MEM_SHIFT);
+		blr |= ((pmembase & PPB_MEM_MASK) >> PPB_MEM_SHIFT);
 		HWRITE4(sc, PPB_REG_PREFMEM, blr);
 		HWRITE4(sc, PPB_REG_PREFBASE_HI32, pmembase >> 32);
 		HWRITE4(sc, PPB_REG_PREFLIM_HI32, pmemlimit >> 32);
@@ -732,10 +732,6 @@ dwpcie_attach_deferred(struct device *self)
 		pba.pba_flags |= PCI_FLAGS_MSI_ENABLED;
 	if (OF_getproplen(sc->sc_node, "msi-map") > 0)
 		pba.pba_flags |= PCI_FLAGS_MSIVEC_ENABLED;
-
-	/* XXX No working MSI on RK3588 yet. */
-	if (OF_is_compatible(sc->sc_node, "rockchip,rk3588-pcie"))
-		pba.pba_flags &= ~PCI_FLAGS_MSI_ENABLED;
 
 	pci_dopm = 1;
 

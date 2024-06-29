@@ -1,4 +1,4 @@
-/*	$OpenBSD: config.c,v 1.95 2024/01/17 08:25:02 claudio Exp $	*/
+/*	$OpenBSD: config.c,v 1.97 2024/02/15 19:11:00 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -507,8 +507,14 @@ config_setmode(struct iked *env, unsigned int passive)
 {
 	unsigned int	 type;
 
+	/*
+	 * In order to control the startup of the processes,
+	 * the messages are sent in this order:
+	 *   PROC_PARENT -> PROC_CERT -> PROC_PARENT -> PROC_IKEV2
+	 * so PROC_CERT is ready before PROC_IKEV2 is activated.
+	 */
 	type = passive ? IMSG_CTL_PASSIVE : IMSG_CTL_ACTIVE;
-	proc_compose(&env->sc_ps, PROC_IKEV2, type, NULL, 0);
+	proc_compose(&env->sc_ps, PROC_CERT, type, NULL, 0);
 
 	return (0);
 }
@@ -645,9 +651,22 @@ config_getsocket(struct iked *env, struct imsg *imsg,
 
 	event_set(&sock->sock_ev, sock->sock_fd,
 	    EV_READ|EV_PERSIST, cb, sock);
-	event_add(&sock->sock_ev, NULL);
 
 	return (0);
+}
+
+void
+config_enablesocket(struct iked *env)
+{
+	struct iked_socket	*sock;
+	size_t			 i;
+
+	for (i = 0; i < nitems(env->sc_sock4); i++)
+		if ((sock = env->sc_sock4[i]) != NULL)
+			event_add(&sock->sock_ev, NULL);
+	for (i = 0; i < nitems(env->sc_sock6); i++)
+		if ((sock = env->sc_sock6[i]) != NULL)
+			event_add(&sock->sock_ev, NULL);
 }
 
 int

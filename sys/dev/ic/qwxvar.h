@@ -1,4 +1,4 @@
-/*	$OpenBSD: qwxvar.h,v 1.10 2024/02/03 10:03:18 stsp Exp $	*/
+/*	$OpenBSD: qwxvar.h,v 1.26 2024/05/28 08:34:52 stsp Exp $	*/
 
 /*
  * Copyright (c) 2018-2019 The Linux Foundation.
@@ -264,7 +264,9 @@ struct ath11k_hw_ops {
 #if notyet
 	void (*tx_mesh_enable)(struct ath11k_base *ab,
 			       struct hal_tcl_data_cmd *tcl_cmd);
-	bool (*rx_desc_get_first_msdu)(struct hal_rx_desc *desc);
+#endif
+	int (*rx_desc_get_first_msdu)(struct hal_rx_desc *desc);
+#if notyet
 	bool (*rx_desc_get_last_msdu)(struct hal_rx_desc *desc);
 #endif
 	uint8_t (*rx_desc_get_l3_pad_bytes)(struct hal_rx_desc *desc);
@@ -662,6 +664,100 @@ struct hal_srng_config {
 
 #define QWX_NUM_SRNG_CFG	21
 
+struct hal_reo_status_header {
+	uint16_t cmd_num;
+	enum hal_reo_cmd_status cmd_status;
+	uint16_t cmd_exe_time;
+	uint32_t timestamp;
+};
+
+struct hal_reo_status_queue_stats {
+	uint16_t ssn;
+	uint16_t curr_idx;
+	uint32_t pn[4];
+	uint32_t last_rx_queue_ts;
+	uint32_t last_rx_dequeue_ts;
+	uint32_t rx_bitmap[8]; /* Bitmap from 0-255 */
+	uint32_t curr_mpdu_cnt;
+	uint32_t curr_msdu_cnt;
+	uint16_t fwd_due_to_bar_cnt;
+	uint16_t dup_cnt;
+	uint32_t frames_in_order_cnt;
+	uint32_t num_mpdu_processed_cnt;
+	uint32_t num_msdu_processed_cnt;
+	uint32_t total_num_processed_byte_cnt;
+	uint32_t late_rx_mpdu_cnt;
+	uint32_t reorder_hole_cnt;
+	uint8_t timeout_cnt;
+	uint8_t bar_rx_cnt;
+	uint8_t num_window_2k_jump_cnt;
+};
+
+struct hal_reo_status_flush_queue {
+	bool err_detected;
+};
+
+enum hal_reo_status_flush_cache_err_code {
+	HAL_REO_STATUS_FLUSH_CACHE_ERR_CODE_SUCCESS,
+	HAL_REO_STATUS_FLUSH_CACHE_ERR_CODE_IN_USE,
+	HAL_REO_STATUS_FLUSH_CACHE_ERR_CODE_NOT_FOUND,
+};
+
+struct hal_reo_status_flush_cache {
+	bool err_detected;
+	enum hal_reo_status_flush_cache_err_code err_code;
+	bool cache_controller_flush_status_hit;
+	uint8_t cache_controller_flush_status_desc_type;
+	uint8_t cache_controller_flush_status_client_id;
+	uint8_t cache_controller_flush_status_err;
+	uint8_t cache_controller_flush_status_cnt;
+};
+
+enum hal_reo_status_unblock_cache_type {
+	HAL_REO_STATUS_UNBLOCK_BLOCKING_RESOURCE,
+	HAL_REO_STATUS_UNBLOCK_ENTIRE_CACHE_USAGE,
+};
+
+struct hal_reo_status_unblock_cache {
+	bool err_detected;
+	enum hal_reo_status_unblock_cache_type unblock_type;
+};
+
+struct hal_reo_status_flush_timeout_list {
+	bool err_detected;
+	bool list_empty;
+	uint16_t release_desc_cnt;
+	uint16_t fwd_buf_cnt;
+};
+
+enum hal_reo_threshold_idx {
+	HAL_REO_THRESHOLD_IDX_DESC_COUNTER0,
+	HAL_REO_THRESHOLD_IDX_DESC_COUNTER1,
+	HAL_REO_THRESHOLD_IDX_DESC_COUNTER2,
+	HAL_REO_THRESHOLD_IDX_DESC_COUNTER_SUM,
+};
+
+struct hal_reo_status_desc_thresh_reached {
+	enum hal_reo_threshold_idx threshold_idx;
+	uint32_t link_desc_counter0;
+	uint32_t link_desc_counter1;
+	uint32_t link_desc_counter2;
+	uint32_t link_desc_counter_sum;
+};
+
+struct hal_reo_status {
+	struct hal_reo_status_header uniform_hdr;
+	uint8_t loop_cnt;
+	union {
+		struct hal_reo_status_queue_stats queue_stats;
+		struct hal_reo_status_flush_queue flush_queue;
+		struct hal_reo_status_flush_cache flush_cache;
+		struct hal_reo_status_unblock_cache unblock_cache;
+		struct hal_reo_status_flush_timeout_list timeout_list;
+		struct hal_reo_status_desc_thresh_reached desc_thresh_reached;
+	} u;
+};
+
 /* HAL context to be used to access SRNG APIs (currently used by data path
  * and transport (CE) modules)
  */
@@ -712,8 +808,6 @@ enum hal_ce_desc {
 	HAL_CE_DESC_DST,
 	HAL_CE_DESC_DST_STATUS,
 };
-
-void qwx_ce_byte_swap(void *mem, uint32_t len);
 
 struct ce_ie_addr {
 	uint32_t ie1_reg_addr;
@@ -777,6 +871,7 @@ struct qwx_rx_data {
 };
 
 struct qwx_tx_data {
+	struct ieee80211_node *ni;
 	struct mbuf	*m;
 	bus_dmamap_t	map;
 	uint8_t eid;
@@ -841,6 +936,13 @@ void qwx_htc_rx_completion_handler(struct qwx_softc *, struct mbuf *);
 void qwx_dp_htt_htc_t2h_msg_handler(struct qwx_softc *, struct mbuf *);
 
 struct qwx_dp;
+
+struct qwx_dp_htt_wbm_tx_status {
+	uint32_t msdu_id;
+	int acked;
+	int ack_rssi;
+	uint16_t peer_id;
+};
 
 #define DP_NUM_CLIENTS_MAX 64
 #define DP_AVG_TIDS_PER_CLIENT 2
@@ -939,7 +1041,7 @@ struct dp_rx_tid {
 struct dp_reo_cache_flush_elem {
 	TAILQ_ENTRY(dp_reo_cache_flush_elem) entry;
 	struct dp_rx_tid data;
-	unsigned long ts;
+	uint64_t ts;
 };
 
 TAILQ_HEAD(dp_reo_cmd_cache_flush_head, dp_reo_cache_flush_elem);
@@ -1333,8 +1435,8 @@ struct dp_rxdma_ring {
 #else
 	struct qwx_rx_data *rx_data;
 #endif
-	int cur;
 	int bufs_max;
+	uint8_t freemap[howmany(DP_RXDMA_BUF_RING_SIZE, 8)];
 };
 
 enum hal_rx_mon_status {
@@ -1371,6 +1473,15 @@ struct hal_rx_user_status {
 	uint32_t mpdu_fcs_ok_bitmap[8];
 	uint32_t mpdu_ok_byte_count;
 	uint32_t mpdu_err_byte_count;
+};
+
+struct hal_rx_wbm_rel_info {
+	uint32_t cookie;
+	enum hal_wbm_rel_src_module err_rel_src;
+	enum hal_reo_dest_ring_push_reason push_reason;
+	uint32_t err_code;
+	int first_msdu;
+	int last_msdu;
 };
 
 #define HAL_INVALID_PEERID 0xffff
@@ -1624,10 +1735,31 @@ struct qwx_ext_irq_grp {
 #endif
 };
 
+struct qwx_rx_radiotap_header {
+	struct ieee80211_radiotap_header wr_ihdr;
+} __packed;
+
+#define IWX_RX_RADIOTAP_PRESENT	0 /* TODO add more information */
+
+struct qwx_tx_radiotap_header {
+	struct ieee80211_radiotap_header wt_ihdr;
+} __packed;
+
+#define IWX_TX_RADIOTAP_PRESENT	0 /* TODO add more information */
+
+struct qwx_setkey_task_arg {
+	struct ieee80211_node *ni;
+	struct ieee80211_key *k;
+	int cmd;
+#define QWX_ADD_KEY	1
+#define QWX_DEL_KEY	2
+};
+
 struct qwx_softc {
 	struct device			sc_dev;
 	struct ieee80211com		sc_ic;
 	uint32_t			sc_flags;
+	int				sc_node;
 
 	int (*sc_newstate)(struct ieee80211com *, enum ieee80211_state, int);
 
@@ -1639,6 +1771,23 @@ struct qwx_softc {
 	struct task		newstate_task;
 	enum ieee80211_state	ns_nstate;
 	int			ns_arg;
+
+	/* Task for setting encryption keys and its arguments. */
+	struct task		setkey_task;
+	/*
+	 * At present we need to process at most two keys at once:
+	 * Our pairwise key and a group key.
+	 * When hostap mode is implemented this array needs to grow or
+	 * it might become a bottleneck for associations that occur at
+	 * roughly the same time.
+	 */
+	struct qwx_setkey_task_arg setkey_arg[2];
+	int setkey_cur;
+	int setkey_tail;
+	int setkey_nkeys;
+
+	int install_key_done;
+	int install_key_status;
 
 	enum ath11k_11d_state	state_11d;
 	int			completed_11d_scan;
@@ -1658,10 +1807,18 @@ struct qwx_softc {
 	struct qwx_survey_info	survey[IEEE80211_CHAN_MAX];
 
 	int			attached;
-	int			have_firmware;
+	struct {
+		u_char *data;
+		size_t size;
+	} fw_img[4];
+#define QWX_FW_AMSS	0
+#define QWX_FW_BOARD	1
+#define QWX_FW_M3	2
+#define QWX_FW_REGDB	3
 
 	int			sc_tx_timer;
 	uint32_t		qfullmsk;
+#define	QWX_MGMT_QUEUE_ID	31
 
 	bus_addr_t			mem;
 	struct ath11k_hw_params		hw_params;
@@ -1729,12 +1886,16 @@ struct qwx_softc {
 	struct qmi_response_type_v01	qmi_resp;
 
 	struct qwx_dmamem		*fwmem;
+	int				 expect_fwmem_req;
 	int				 fwmem_ready;
 	int				 fw_init_done;
 
 	int				 ctl_resp;
 
 	struct qwx_dmamem		*m3_mem;
+
+	struct timeout			 mon_reap_timer;
+#define ATH11K_MON_TIMER_INTERVAL	10
 
 	/* Provided by attachment driver: */
 	struct qwx_ops			ops;
@@ -1750,6 +1911,22 @@ struct qwx_softc {
 	uint32_t			msi_ce_irqmask;
 
 	struct qmi_wlanfw_request_mem_ind_msg_v01 *sc_req_mem_ind;
+
+	caddr_t			sc_drvbpf;
+
+	union {
+		struct qwx_rx_radiotap_header th;
+		uint8_t	pad[IEEE80211_RADIOTAP_HDRLEN];
+	} sc_rxtapu;
+#define sc_rxtap	sc_rxtapu.th
+	int			sc_rxtap_len;
+
+	union {
+		struct qwx_tx_radiotap_header th;
+		uint8_t	pad[IEEE80211_RADIOTAP_HDRLEN];
+	} sc_txtapu;
+#define sc_txtap	sc_txtapu.th
+	int			sc_txtap_len;
 };
 
 int	qwx_ce_intr(void *);
@@ -1759,6 +1936,7 @@ int	qwx_dp_service_srng(struct qwx_softc *, int);
 int	qwx_init_hw_params(struct qwx_softc *);
 int	qwx_attach(struct qwx_softc *);
 void	qwx_detach(struct qwx_softc *);
+int	qwx_activate(struct device *, int);
 
 void	qwx_core_deinit(struct qwx_softc *);
 void	qwx_ce_cleanup_pipes(struct qwx_softc *);
@@ -1811,9 +1989,16 @@ struct ath11k_peer {
 struct qwx_node {
 	struct ieee80211_node ni;
 	struct ath11k_peer peer;
+	unsigned int flags;
+#define QWX_NODE_FLAG_HAVE_PAIRWISE_KEY	0x01
+#define QWX_NODE_FLAG_HAVE_GROUP_KEY	0x02
 };
 
 struct ieee80211_node *qwx_node_alloc(struct ieee80211com *);
+int	qwx_set_key(struct ieee80211com *, struct ieee80211_node *,
+    struct ieee80211_key *);
+void	qwx_delete_key(struct ieee80211com *, struct ieee80211_node *,
+    struct ieee80211_key *);
 
 void	qwx_qrtr_recv_msg(struct qwx_softc *, struct mbuf *);
 

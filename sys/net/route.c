@@ -1,4 +1,4 @@
-/*	$OpenBSD: route.c,v 1.427 2024/01/31 14:56:42 bluhm Exp $	*/
+/*	$OpenBSD: route.c,v 1.436 2024/03/31 15:53:12 bluhm Exp $	*/
 /*	$NetBSD: route.c,v 1.14 1996/02/13 22:00:46 christos Exp $	*/
 
 /*
@@ -201,8 +201,9 @@ route_init(void)
 #endif
 }
 
-void
-route_cache(struct route *ro, struct in_addr addr, u_int rtableid)
+int
+route_cache(struct route *ro, const struct in_addr *dst,
+    const struct in_addr *src, u_int rtableid)
 {
 	u_long gen;
 
@@ -212,21 +213,103 @@ route_cache(struct route *ro, struct in_addr addr, u_int rtableid)
 	if (rtisvalid(ro->ro_rt) &&
 	    ro->ro_generation == gen &&
 	    ro->ro_tableid == rtableid &&
-	    ro->ro_dst.sa_family == AF_INET &&
-	    satosin(&ro->ro_dst)->sin_addr.s_addr == addr.s_addr) {
-		return;
+	    ro->ro_dstsa.sa_family == AF_INET &&
+	    ro->ro_dstsin.sin_addr.s_addr == dst->s_addr) {
+		if (src == NULL || !ipmultipath ||
+		    !ISSET(ro->ro_rt->rt_flags, RTF_MPATH) ||
+		    (ro->ro_srcin.s_addr != INADDR_ANY &&
+		    ro->ro_srcin.s_addr == src->s_addr)) {
+			ipstat_inc(ips_rtcachehit);
+			return (0);
+		}
 	}
 
+	ipstat_inc(ips_rtcachemiss);
 	rtfree(ro->ro_rt);
-	ro->ro_rt = NULL;
+	memset(ro, 0, sizeof(*ro));
 	ro->ro_generation = gen;
 	ro->ro_tableid = rtableid;
 
-	memset(&ro->ro_dst, 0, sizeof(ro->ro_dst));
-	satosin(&ro->ro_dst)->sin_family = AF_INET;
-	satosin(&ro->ro_dst)->sin_len = sizeof(struct sockaddr_in);
-	satosin(&ro->ro_dst)->sin_addr = addr;
+	ro->ro_dstsin.sin_family = AF_INET;
+	ro->ro_dstsin.sin_len = sizeof(struct sockaddr_in);
+	ro->ro_dstsin.sin_addr = *dst;
+	if (src != NULL)
+		ro->ro_srcin = *src;
+
+	return (ESRCH);
 }
+
+/*
+ * Check cache for route, else allocate a new one, potentially using multipath
+ * to select the peer.  Update cache and return valid route or NULL.
+ */
+struct rtentry *
+route_mpath(struct route *ro, const struct in_addr *dst,
+    const struct in_addr *src, u_int rtableid)
+{
+	if (route_cache(ro, dst, src, rtableid)) {
+		uint32_t *s = NULL;
+
+		if (ro->ro_srcin.s_addr != INADDR_ANY)
+			s = &ro->ro_srcin.s_addr;
+		ro->ro_rt = rtalloc_mpath(&ro->ro_dstsa, s, ro->ro_tableid);
+	}
+	return (ro->ro_rt);
+}
+
+#ifdef INET6
+int
+route6_cache(struct route *ro, const struct in6_addr *dst,
+    const struct in6_addr *src, u_int rtableid)
+{
+	u_long gen;
+
+	gen = atomic_load_long(&rtgeneration);
+	membar_consumer();
+
+	if (rtisvalid(ro->ro_rt) &&
+	    ro->ro_generation == gen &&
+	    ro->ro_tableid == rtableid &&
+	    ro->ro_dstsa.sa_family == AF_INET6 &&
+	    IN6_ARE_ADDR_EQUAL(&ro->ro_dstsin6.sin6_addr, dst)) {
+		if (src == NULL || !ip6_multipath ||
+		    !ISSET(ro->ro_rt->rt_flags, RTF_MPATH) ||
+		    (!IN6_IS_ADDR_UNSPECIFIED(&ro->ro_srcin6) &&
+		    IN6_ARE_ADDR_EQUAL(&ro->ro_srcin6, src))) {
+			ip6stat_inc(ip6s_rtcachehit);
+			return (0);
+		}
+	}
+
+	ip6stat_inc(ip6s_rtcachemiss);
+	rtfree(ro->ro_rt);
+	memset(ro, 0, sizeof(*ro));
+	ro->ro_generation = gen;
+	ro->ro_tableid = rtableid;
+
+	ro->ro_dstsin6.sin6_family = AF_INET6;
+	ro->ro_dstsin6.sin6_len = sizeof(struct sockaddr_in6);
+	ro->ro_dstsin6.sin6_addr = *dst;
+	if (src != NULL)
+		ro->ro_srcin6 = *src;
+
+	return (ESRCH);
+}
+
+struct rtentry *
+route6_mpath(struct route *ro, const struct in6_addr *dst,
+    const struct in6_addr *src, u_int rtableid)
+{
+	if (route6_cache(ro, dst, src, rtableid)) {
+		uint32_t *s = NULL;
+
+		if (!IN6_IS_ADDR_UNSPECIFIED(&ro->ro_srcin6))
+			s = &ro->ro_srcin6.s6_addr32[0];
+		ro->ro_rt = rtalloc_mpath(&ro->ro_dstsa, s, ro->ro_tableid);
+	}
+	return (ro->ro_rt);
+}
+#endif
 
 /*
  * Returns 1 if the (cached) ``rt'' entry is still valid, 0 otherwise.

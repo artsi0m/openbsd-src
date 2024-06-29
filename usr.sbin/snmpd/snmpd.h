@@ -1,4 +1,4 @@
-/*	$OpenBSD: snmpd.h,v 1.117 2024/01/16 13:33:12 claudio Exp $	*/
+/*	$OpenBSD: snmpd.h,v 1.120 2024/05/21 05:00:48 jsg Exp $	*/
 
 /*
  * Copyright (c) 2007, 2008, 2012 Reyk Floeter <reyk@openbsd.org>
@@ -36,6 +36,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "mib.h"
 #include "snmp.h"
 
 #ifndef nitems
@@ -340,7 +341,7 @@ struct trap_address {
 			int		 ta_seclevel;
 		};
 	};
-	struct ber_oid		*ta_oid;
+	struct ber_oid		 ta_oid;
 
 	TAILQ_ENTRY(trap_address) entry;
 };
@@ -396,6 +397,7 @@ struct snmpd {
 #define SNMPD_F_VERBOSE		 0x01
 #define SNMPD_F_DEBUG		 0x02
 #define SNMPD_F_NONAMES		 0x04
+	enum mib_oidfmt		 sc_oidfmt;
 
 	const char		*sc_confpath;
 	struct addresslist	 sc_addresses;
@@ -426,7 +428,7 @@ struct snmpd {
 };
 
 struct trapcmd {
-	struct ber_oid		*cmd_oid;
+	struct ber_oid		 cmd_oid;
 		/* sideways return for intermediate lookups */
 	struct trapcmd		*cmd_maybe;
 
@@ -454,7 +456,6 @@ RB_PROTOTYPE(snmp_messages, snmp_message, sm_entry, snmp_messagecmp)
 
 /* trap.c */
 void		 trap_init(void);
-int		 trap_imsg(struct imsgev *, pid_t);
 int		 trap_send(struct ber_oid *, struct ber_element *);
 
 /* smi.c */

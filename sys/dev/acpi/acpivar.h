@@ -1,4 +1,4 @@
-/*	$OpenBSD: acpivar.h,v 1.125 2023/11/29 03:41:31 jsg Exp $	*/
+/*	$OpenBSD: acpivar.h,v 1.128 2024/06/25 11:57:10 kettenis Exp $	*/
 /*
  * Copyright (c) 2005 Thorsten Lockert <tholo@sigmasoft.com>
  *
@@ -253,6 +253,7 @@ struct acpi_softc {
 		int slp_typb;
 	}			sc_sleeptype[6];
 	int			sc_lastgpe;
+	int			sc_wakegpe;
 
 	struct gpe_block	*gpe_table;
 
@@ -269,6 +270,7 @@ struct acpi_softc {
 	struct aml_node		*sc_sst;
 	struct aml_node		*sc_wak;
 	int			sc_state;
+	time_t			sc_resume_time;
 	struct acpiec_softc	*sc_ec;		/* XXX assume single EC */
 
 	struct acpi_ac_head	sc_ac;
@@ -340,7 +342,7 @@ int	 acpi_sleep_cpu(struct acpi_softc *, int);
 void	 acpi_sleep_pm(struct acpi_softc *, int);
 void	 acpi_resume_pm(struct acpi_softc *, int);
 void	 acpi_resume_cpu(struct acpi_softc *, int);
-void	 acpi_sleep_walk(struct acpi_softc *, int);
+int	 acpi_resuming(struct acpi_softc *);
 
 #define ACPI_IOREAD 0
 #define ACPI_IOWRITE 1
@@ -354,12 +356,9 @@ void	acpi_register_gsb(struct acpi_softc *, struct aml_node *);
 
 int	acpi_set_gpehandler(struct acpi_softc *, int,
 	    int (*)(struct acpi_softc *, int, void *), void *, int);
-void	acpi_enable_gpe(struct acpi_softc *, uint32_t);
 
-int	acpiec_intr(struct acpiec_softc *);
 void	acpiec_read(struct acpiec_softc *, uint8_t, int, uint8_t *);
 void	acpiec_write(struct acpiec_softc *, uint8_t, int, uint8_t *);
-void	acpiec_handle_events(struct acpiec_softc *);
 
 #if NACPIPWRRES > 0
 int	acpipwrres_ref_incr(struct acpipwrres_softc *, struct aml_node *);

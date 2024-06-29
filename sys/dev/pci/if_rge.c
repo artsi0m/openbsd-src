@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_rge.c,v 1.23 2023/12/22 05:28:14 kevlo Exp $	*/
+/*	$OpenBSD: if_rge.c,v 1.26 2024/05/24 06:02:56 jsg Exp $	*/
 
 /*
  * Copyright (c) 2019, 2020, 2023 Kevin Lo <kevlo@openbsd.org>
@@ -25,8 +25,6 @@
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
 #include <sys/malloc.h>
-#include <sys/kernel.h>
-#include <sys/socket.h>
 #include <sys/device.h>
 #include <sys/endian.h>
 
@@ -209,7 +207,8 @@ rge_attach(struct device *parent, struct device *self, void *aux)
 	/*
 	 * Allocate interrupt.
 	 */
-	if (pci_intr_map_msi(pa, &ih) == 0)
+	if (pci_intr_map_msix(pa, 0, &ih) == 0 ||
+	    pci_intr_map_msi(pa, &ih) == 0)
 		sc->rge_flags |= RGE_FLAG_MSI;
 	else if (pci_intr_map(pa, &ih) != 0) {
 		printf(": couldn't map interrupt\n");
@@ -1250,7 +1249,7 @@ rge_rxeof(struct rge_queues *q)
 			 * If this is part of a multi-fragment packet,
 			 * discard all the pieces.
 			 */
-			 if (q->q_rx.rge_head != NULL) {
+			if (q->q_rx.rge_head != NULL) {
 				m_freem(q->q_rx.rge_head);
 				q->q_rx.rge_head = q->q_rx.rge_tail = NULL;
 			}

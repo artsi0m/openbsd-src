@@ -1,4 +1,4 @@
-/*	$OpenBSD: tcp_input.c,v 1.399 2024/01/27 21:13:46 bluhm Exp $	*/
+/*	$OpenBSD: tcp_input.c,v 1.406 2024/06/07 08:02:17 jsg Exp $	*/
 /*	$NetBSD: tcp_input.c,v 1.23 1996/02/13 23:43:44 christos Exp $	*/
 
 /*
@@ -88,6 +88,7 @@
 #include <netinet/ip.h>
 #include <netinet/in_pcb.h>
 #include <netinet/ip_var.h>
+#include <netinet6/ip6_var.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_fsm.h>
 #include <netinet/tcp_seq.h>
@@ -99,21 +100,12 @@
 #include <net/pfvar.h>
 #endif
 
-struct	tcpiphdr tcp_saveti;
-
 int tcp_mss_adv(struct mbuf *, int);
 int tcp_flush_queue(struct tcpcb *);
 
 #ifdef INET6
 #include <netinet6/in6_var.h>
 #include <netinet6/nd6.h>
-
-struct  tcpipv6hdr tcp_saveti6;
-
-/* for the packet header length in the mbuf */
-#define M_PH_LEN(m)      (((struct mbuf *)(m))->m_pkthdr.len)
-#define M_V6_LEN(m)      (M_PH_LEN(m) - sizeof(struct ip6_hdr))
-#define M_V4_LEN(m)      (M_PH_LEN(m) - sizeof(struct ip))
 #endif /* INET6 */
 
 int	tcprexmtthresh = 3;
@@ -143,9 +135,10 @@ struct timeval tcp_ackdrop_ppslim_last;
 #ifdef INET6
 #define ND6_HINT(tp) \
 do { \
-	if (tp && tp->t_inpcb && (tp->t_inpcb->inp_flags & INP_IPV6) &&	\
-	    rtisvalid(tp->t_inpcb->inp_route6.ro_rt)) {			\
-		nd6_nud_hint(tp->t_inpcb->inp_route6.ro_rt);		\
+	if (tp && tp->t_inpcb &&					\
+	    ISSET(tp->t_inpcb->inp_flags, INP_IPV6) &&			\
+	    rtisvalid(tp->t_inpcb->inp_route.ro_rt)) {			\
+		nd6_nud_hint(tp->t_inpcb->inp_route.ro_rt);		\
 	} \
 } while (0)
 #else
@@ -372,7 +365,13 @@ tcp_input(struct mbuf **mp, int *offp, int proto, int af)
 	int todrop, acked, ourfinisacked;
 	int hdroptlen = 0;
 	short ostate;
-	caddr_t saveti;
+	union {
+		struct	tcpiphdr tcpip;
+#ifdef INET6
+		struct  tcpipv6hdr tcpip6;
+#endif
+		char	caddr;
+	} saveti;
 	tcp_seq iss, *reuse = NULL;
 	uint64_t now;
 	u_long tiwin;
@@ -537,7 +536,7 @@ findpcb:
 		switch (af) {
 #ifdef INET6
 		case AF_INET6:
-			inp = in6_pcblookup(&tcbtable, &ip6->ip6_src,
+			inp = in6_pcblookup(&tcb6table, &ip6->ip6_src,
 			    th->th_sport, &ip6->ip6_dst, th->th_dport,
 			    m->m_pkthdr.ph_rtableid);
 			break;
@@ -554,10 +553,10 @@ findpcb:
 		switch (af) {
 #ifdef INET6
 		case AF_INET6:
-			inp = in6_pcblookup_listen(&tcbtable, &ip6->ip6_dst,
+			inp = in6_pcblookup_listen(&tcb6table, &ip6->ip6_dst,
 			    th->th_dport, m, m->m_pkthdr.ph_rtableid);
 			break;
-#endif /* INET6 */
+#endif
 		case AF_INET:
 			inp = in_pcblookup_listen(&tcbtable, ip->ip_dst,
 			    th->th_dport, m, m->m_pkthdr.ph_rtableid);
@@ -586,7 +585,7 @@ findpcb:
 			    &tdbi->dst, tdbi->proto);
 		}
 		error = ipsp_spd_lookup(m, af, iphlen, IPSP_DIRECTION_IN,
-		    tdb, inp ? inp->inp_seclevel : NULL, NULL, NULL);
+		    tdb, inp ? &inp->inp_seclevel : NULL, NULL, NULL);
 		tdb_unref(tdb);
 		if (error) {
 			tcpstat_inc(tcps_rcvnosec);
@@ -671,15 +670,13 @@ findpcb:
 			switch (af) {
 #ifdef INET6
 			case AF_INET6:
-				saveti = (caddr_t) &tcp_saveti6;
-				memcpy(&tcp_saveti6.ti6_i, ip6, sizeof(*ip6));
-				memcpy(&tcp_saveti6.ti6_t, th, sizeof(*th));
+				saveti.tcpip6.ti6_i = *ip6;
+				saveti.tcpip6.ti6_t = *th;
 				break;
 #endif
 			case AF_INET:
-				saveti = (caddr_t) &tcp_saveti;
-				memcpy(&tcp_saveti.ti_i, ip, sizeof(*ip));
-				memcpy(&tcp_saveti.ti_t, th, sizeof(*th));
+				memcpy(&saveti.tcpip.ti_i, ip, sizeof(*ip));
+				saveti.tcpip.ti_t = *th;
 				break;
 			}
 		}
@@ -1076,12 +1073,13 @@ findpcb:
 	 * Receive window is amount of space in rcv queue,
 	 * but not less than advertised window.
 	 */
-	{ int win;
+	{
+		int win;
 
-	win = sbspace(so, &so->so_rcv);
-	if (win < 0)
-		win = 0;
-	tp->rcv_wnd = imax(win, (int)(tp->rcv_adv - tp->rcv_nxt));
+		win = sbspace(so, &so->so_rcv);
+		if (win < 0)
+			win = 0;
+		tp->rcv_wnd = imax(win, (int)(tp->rcv_adv - tp->rcv_nxt));
 	}
 
 	switch (tp->t_state) {
@@ -2030,7 +2028,7 @@ dodata:							/* XXX */
 		}
 	}
 	if (otp)
-		tcp_trace(TA_INPUT, ostate, tp, otp, saveti, 0, tlen);
+		tcp_trace(TA_INPUT, ostate, tp, otp, &saveti.caddr, 0, tlen);
 
 	/*
 	 * Return any desired output.
@@ -2109,7 +2107,7 @@ drop:
 	 * Drop space held by incoming segment and return.
 	 */
 	if (otp)
-		tcp_trace(TA_DROP, ostate, tp, otp, saveti, 0, tlen);
+		tcp_trace(TA_DROP, ostate, tp, otp, &saveti.caddr, 0, tlen);
 
 	m_freem(m);
 	in_pcbunref(inp);
@@ -3165,7 +3163,7 @@ syn_cache_put(struct syn_cache *sc)
 
 	/* Dealing with last reference, no lock needed. */
 	m_free(sc->sc_ipopts);
-	rtfree(sc->sc_route4.ro_rt);
+	rtfree(sc->sc_route.ro_rt);
 
 	pool_put(&syn_cache_pool, sc);
 }
@@ -3538,21 +3536,19 @@ syn_cache_get(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 	 * from the old pcb. Ditto for any other
 	 * IPsec-related information.
 	 */
-	memcpy(inp->inp_seclevel, oldinp->inp_seclevel,
-	    sizeof(oldinp->inp_seclevel));
+	inp->inp_seclevel = oldinp->inp_seclevel;
 #endif /* IPSEC */
 #ifdef INET6
-	/*
-	 * inp still has the OLD in_pcb stuff, set the
-	 * v6-related flags on the new guy, too.
-	 */
-	inp->inp_flags |= (oldinp->inp_flags & INP_IPV6);
-	if (inp->inp_flags & INP_IPV6) {
+	if (ISSET(inp->inp_flags, INP_IPV6)) {
+		KASSERT(ISSET(oldinp->inp_flags, INP_IPV6));
+
 		inp->inp_ipv6.ip6_hlim = oldinp->inp_ipv6.ip6_hlim;
 		inp->inp_hops = oldinp->inp_hops;
 	} else
-#endif /* INET6 */
+#endif
 	{
+		KASSERT(!ISSET(oldinp->inp_flags, INP_IPV6));
+
 		inp->inp_ip.ip_ttl = oldinp->inp_ip.ip_ttl;
 		inp->inp_options = ip_srcroute(m);
 		if (inp->inp_options == NULL) {
@@ -3577,13 +3573,8 @@ syn_cache_get(struct sockaddr *src, struct sockaddr *dst, struct tcphdr *th,
 	/*
 	 * Give the new socket our cached route reference.
 	 */
-	if (src->sa_family == AF_INET)
-		inp->inp_route = sc->sc_route4;         /* struct assignment */
-#ifdef INET6
-	else
-		inp->inp_route6 = sc->sc_route6;
-#endif
-	sc->sc_route4.ro_rt = NULL;
+	inp->inp_route = sc->sc_route;		/* struct assignment */
+	sc->sc_route.ro_rt = NULL;
 
 	am = m_get(M_DONTWAIT, MT_SONAME);	/* XXX */
 	if (am == NULL)
@@ -4151,9 +4142,9 @@ syn_cache_respond(struct syn_cache *sc, struct mbuf *m, uint64_t now)
 		if (inp != NULL)
 			ip->ip_tos = inp->inp_ip.ip_tos;
 
-		error = ip_output(m, sc->sc_ipopts, &sc->sc_route4,
+		error = ip_output(m, sc->sc_ipopts, &sc->sc_route,
 		    (ip_mtudisc ? IP_MTUDISC : 0),  NULL,
-		    inp ? inp->inp_seclevel : NULL, 0);
+		    inp ? &inp->inp_seclevel : NULL, 0);
 		break;
 #ifdef INET6
 	case AF_INET6:
@@ -4163,8 +4154,8 @@ syn_cache_respond(struct syn_cache *sc, struct mbuf *m, uint64_t now)
 		ip6->ip6_hlim = in6_selecthlim(inp);
 		/* leave flowlabel = 0, it is legal and require no state mgmt */
 
-		error = ip6_output(m, NULL /*XXX*/, &sc->sc_route6, 0,
-		    NULL, inp ? inp->inp_seclevel : NULL);
+		error = ip6_output(m, NULL /*XXX*/, &sc->sc_route, 0,
+		    NULL, inp ? &inp->inp_seclevel : NULL);
 		break;
 #endif
 	}

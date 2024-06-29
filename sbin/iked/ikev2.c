@@ -1,4 +1,4 @@
-/*	$OpenBSD: ikev2.c,v 1.383 2024/01/24 10:09:07 tobhe Exp $	*/
+/*	$OpenBSD: ikev2.c,v 1.386 2024/03/21 22:08:49 tobhe Exp $	*/
 
 /*
  * Copyright (c) 2019 Tobias Heider <tobias.heider@stusta.de>
@@ -248,6 +248,7 @@ ikev2_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 	case IMSG_CTL_PASSIVE:
 		if (config_getmode(env, imsg->hdr.type) == -1)
 			return (0);	/* ignore error */
+		config_enablesocket(env);
 		timer_del(env, &env->sc_inittmr);
 		TAILQ_FOREACH(pol, &env->sc_policies, pol_entry) {
 			if (policy_generate_ts(pol) == -1)
@@ -755,8 +756,8 @@ ikev2_recv(struct iked *env, struct iked_message *msg)
 		 * See if we have responded to this request before
 		 * For return values 0 and -1 we have.
 		 */
-		if ((r = ikev2_msg_retransmit_response(env, sa, msg,
-		    hdr->ike_exchange)) != -2) {
+		if ((r = ikev2_msg_retransmit_response(env, sa, msg, hdr))
+		     != -2) {
 			if (r == -1) {
 				log_warn("%s: failed to retransmit a "
 				    "response", __func__);
@@ -5932,8 +5933,7 @@ ikev2_prfplus(struct iked_hash *prf, struct ibuf *key, struct ibuf *seed,
 
 	for (i = 0; i < rlen; i++) {
 		if (t1 != NULL) {
-			t2 = ibuf_new(ibuf_data(t1), ibuf_size(t1));
-			ibuf_free(t1);
+			t2 = t1;
 		} else
 			t2 = ibuf_new(NULL, 0);
 		t1 = ibuf_new(NULL, hash_keylength(prf));

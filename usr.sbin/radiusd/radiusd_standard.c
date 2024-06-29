@@ -1,4 +1,4 @@
-/*	$OpenBSD: radiusd_standard.c,v 1.2 2024/01/08 04:16:48 yasuoka Exp $	*/
+/*	$OpenBSD: radiusd_standard.c,v 1.5 2024/04/23 13:34:51 jsg Exp $	*/
 
 /*
  * Copyright (c) 2013, 2023 Internet Initiative Japan Inc.
@@ -74,7 +74,7 @@ main(int argc, char *argv[])
 	    STDIN_FILENO, &module_standard, &handlers)) == NULL)
 		err(1, "Could not create a module instance");
 
-	module_drop_privilege(module_standard.base);
+	module_drop_privilege(module_standard.base, 0);
 	if (pledge("stdio", NULL) == -1)
 		err(1, "pledge");
 
@@ -269,10 +269,10 @@ module_standard_resdeco(void *ctx, u_int q_id, const u_char *req, size_t reqlen,
 	RADIUS_PACKET		*radres = NULL;
 	struct attr		*attr;
 
-	TAILQ_FOREACH(attr, &module->remove_reqattrs, next) {
+	TAILQ_FOREACH(attr, &module->remove_resattrs, next) {
 		if (radres == NULL &&
 		    (radres = radius_convert_packet(res, reslen)) == NULL) {
-			 syslog(LOG_ERR,
+			syslog(LOG_ERR,
 			    "%s: radius_convert_packet() failed: %m", __func__);
 			module_stop(module->base);
 			return;

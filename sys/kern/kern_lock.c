@@ -1,4 +1,4 @@
-/*	$OpenBSD: kern_lock.c,v 1.72 2022/04/26 15:31:14 dv Exp $	*/
+/*	$OpenBSD: kern_lock.c,v 1.74 2024/05/29 18:55:45 claudio Exp $	*/
 
 /*
  * Copyright (c) 2017 Visa Hankala
@@ -97,9 +97,6 @@ ___mp_lock_init(struct __mp_lock *mpl, const struct lock_type *type)
 	if (mpl == &kernel_lock)
 		mpl->mpl_lock_obj.lo_flags = LO_WITNESS | LO_INITIALIZED |
 		    LO_SLEEPABLE | (LO_CLASS_KERNEL_LOCK << LO_CLASSSHIFT);
-	else if (mpl == &sched_lock)
-		mpl->mpl_lock_obj.lo_flags = LO_WITNESS | LO_INITIALIZED |
-		    LO_RECURSABLE | (LO_CLASS_SCHED_LOCK << LO_CLASSSHIFT);
 	WITNESS_INIT(&mpl->mpl_lock_obj, type);
 #endif
 }
@@ -264,15 +261,17 @@ mtx_enter(struct mutex *mtx)
 
 	spc->spc_spinning++;
 	while (mtx_enter_try(mtx) == 0) {
-		CPU_BUSY_CYCLE();
-
+		do {
+			CPU_BUSY_CYCLE();
 #ifdef MP_LOCKDEBUG
-		if (--nticks == 0) {
-			db_printf("%s: %p lock spun out\n", __func__, mtx);
-			db_enter();
-			nticks = __mp_lock_spinout;
-		}
+			if (--nticks == 0) {
+				db_printf("%s: %p lock spun out\n",
+				    __func__, mtx);
+				db_enter();
+				nticks = __mp_lock_spinout;
+			}
 #endif
+		} while (mtx->mtx_owner != NULL);
 	}
 	spc->spc_spinning--;
 }

@@ -1,4 +1,4 @@
-# $OpenBSD: GENERIC,v 1.282 2024/01/24 07:36:52 kevlo Exp $
+# $OpenBSD: GENERIC,v 1.286 2024/03/25 17:24:03 patrick Exp $
 #
 # GENERIC machine description file
 #
@@ -244,6 +244,7 @@ bse*		at fdt?
 bse*		at acpi?
 dwctwo*		at fdt?
 usb*		at dwctwo?
+rpigpio*	at fdt? early 1
 
 # Amlogic SoCs
 amlclock*	at fdt? early 1
@@ -316,6 +317,8 @@ rkpcie*		at fdt?
 pci*		at rkpcie?
 rkpwm*		at fdt?
 rkrng*		at fdt?
+rkspi*		at fdt?
+rkpmic*		at spi?
 rktemp*		at fdt?
 rkvop*		at fdt?
 rkdwusb*	at fdt?
@@ -370,6 +373,7 @@ iic*		at sxitwi?	# I2C bus
 dwxe*		at fdt?
 
 # Xilinx Zynq UltraScale+ SoCs
+cad*		at fdt?			# Ethernet controller
 cduart*		at fdt?
 
 # PCI
@@ -397,7 +401,7 @@ bwfm*		at pci?			# Broadcom FullMAC
 iwn*		at pci?			# Intel WiFi Link 4965/5000/1000/6000
 iwm*		at pci?			# Intel WiFi Link 7xxx
 iwx*		at pci?			# Intel WiFi Link 22xxx
-#qwx*		at pci?			# Qualcomm 802.11ax
+qwx*		at pci?			# Qualcomm 802.11ax
 
 # PCI SCSI
 ahci*		at pci? flags 0x0000	# AHCI SATA controllers

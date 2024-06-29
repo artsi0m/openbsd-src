@@ -1,4 +1,4 @@
-/*	$OpenBSD: vioblk.c,v 1.10 2024/02/03 00:28:07 jsg Exp $	*/
+/*	$OpenBSD: vioblk.c,v 1.13 2024/02/20 21:40:37 dv Exp $	*/
 
 /*
  * Copyright (c) 2023 Dave Voutila <dv@openbsd.org>
@@ -167,7 +167,7 @@ vioblk_main(int fd, int fd_vmm)
 	/* Wire up an async imsg channel. */
 	log_debug("%s: wiring in async vm event handler (fd=%d)", __func__,
 		dev.async_fd);
-	if (vm_device_pipe(&dev, dev_dispatch_vm)) {
+	if (vm_device_pipe(&dev, dev_dispatch_vm, NULL)) {
 		ret = EIO;
 		log_warnx("vm_device_pipe");
 		goto fail;
@@ -176,11 +176,6 @@ vioblk_main(int fd, int fd_vmm)
 	/* Configure our sync channel event handler. */
 	log_debug("%s: wiring in sync channel handler (fd=%d)", __func__,
 		dev.sync_fd);
-	if (fcntl(dev.sync_fd, F_SETFL, O_NONBLOCK) == -1) {
-		ret = errno;
-		log_warn("%s: fcntl", __func__);
-		goto fail;
-	}
 	imsg_init(&dev.sync_iev.ibuf, dev.sync_fd);
 	dev.sync_iev.handler = handle_sync_io;
 	dev.sync_iev.data = &dev;
@@ -301,7 +296,7 @@ vioblk_notifyq(struct vioblk_dev *dev)
 	uint8_t ds;
 	off_t offset;
 	ssize_t sz;
-	int is_write, notify, i;
+	int is_write, notify = 0, i;
 	char *vr;
 	struct vring_desc *table, *desc;
 	struct vring_avail *avail;

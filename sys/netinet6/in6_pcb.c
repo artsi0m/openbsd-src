@@ -1,4 +1,4 @@
-/*	$OpenBSD: in6_pcb.c,v 1.134 2024/01/31 12:27:57 bluhm Exp $	*/
+/*	$OpenBSD: in6_pcb.c,v 1.144 2024/04/12 16:07:09 bluhm Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -114,11 +114,11 @@
 #include <net/pfvar.h>
 
 #include <netinet/in.h>
+#include <netinet6/in6_var.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
+#include <netinet6/ip6_var.h>
 #include <netinet/in_pcb.h>
-
-#include <netinet6/in6_var.h>
 
 #if NSTOEPLITZ > 0
 #include <net/toeplitz.h>
@@ -313,7 +313,7 @@ in6_pcbconnect(struct inpcb *inp, struct mbuf *nam)
 
 	if (IN6_IS_ADDR_UNSPECIFIED(&inp->inp_laddr6)) {
 		if (inp->inp_lport == 0) {
-			error = in_pcbbind_locked(inp, NULL, curproc);
+			error = in_pcbbind_locked(inp, NULL, in6a, curproc);
 			if (error) {
 				mtx_leave(&table->inpt_mtx);
 				return (error);
@@ -479,8 +479,7 @@ in6_pcbnotify(struct inpcbtable *table, const struct sockaddr_in6 *dst,
 	rw_enter_write(&table->inpt_notify);
 	mtx_enter(&table->inpt_mtx);
 	TAILQ_FOREACH(inp, &table->inpt_queue, inp_queue) {
-		if (!ISSET(inp->inp_flags, INP_IPV6))
-			continue;
+		KASSERT(ISSET(inp->inp_flags, INP_IPV6));
 
 		/*
 		 * Under the following condition, notify of redirects
@@ -516,13 +515,10 @@ in6_pcbnotify(struct inpcbtable *table, const struct sockaddr_in6 *dst,
 		if ((PRC_IS_REDIRECT(cmd) || cmd == PRC_HOSTDEAD) &&
 		    IN6_IS_ADDR_UNSPECIFIED(&inp->inp_laddr6) &&
 		    inp->inp_route.ro_rt &&
-		    !(inp->inp_route.ro_rt->rt_flags & RTF_HOST)) {
-			struct sockaddr_in6 *dst6;
-
-			dst6 = satosin6(&inp->inp_route.ro_dst);
-			if (IN6_ARE_ADDR_EQUAL(&dst6->sin6_addr,
-			    &dst->sin6_addr))
-				goto do_notify;
+		    !(inp->inp_route.ro_rt->rt_flags & RTF_HOST) &&
+		    IN6_ARE_ADDR_EQUAL(&inp->inp_route.ro_dstsin6.sin6_addr,
+		    &dst->sin6_addr)) {
+			goto do_notify;
 		}
 
 		/*
@@ -564,30 +560,10 @@ in6_pcbnotify(struct inpcbtable *table, const struct sockaddr_in6 *dst,
 struct rtentry *
 in6_pcbrtentry(struct inpcb *inp)
 {
-	struct route_in6 *ro = &inp->inp_route6;
-
-	/* check if route is still valid */
-	if (!rtisvalid(ro->ro_rt)) {
-		rtfree(ro->ro_rt);
-		ro->ro_rt = NULL;
-	}
-
-	/*
-	 * No route yet, so try to acquire one.
-	 */
-	if (ro->ro_rt == NULL) {
-		memset(ro, 0, sizeof(struct route_in6));
-
-		if (IN6_IS_ADDR_UNSPECIFIED(&inp->inp_faddr6))
-			return (NULL);
-		ro->ro_dst.sin6_family = AF_INET6;
-		ro->ro_dst.sin6_len = sizeof(struct sockaddr_in6);
-		ro->ro_dst.sin6_addr = inp->inp_faddr6;
-		ro->ro_tableid = inp->inp_rtableid;
-		ro->ro_rt = rtalloc_mpath(sin6tosa(&ro->ro_dst),
-		    &inp->inp_laddr6.s6_addr32[0], ro->ro_tableid);
-	}
-	return (ro->ro_rt);
+	if (IN6_IS_ADDR_UNSPECIFIED(&inp->inp_faddr6))
+		return (NULL);
+	return (route6_mpath(&inp->inp_route, &inp->inp_faddr6,
+	    &inp->inp_laddr6, inp->inp_rtableid));
 }
 
 struct inpcb *
@@ -603,8 +579,8 @@ in6_pcbhash_lookup(struct inpcbtable *table, uint64_t hash, u_int rdomain,
 
 	head = &table->inpt_hashtbl[hash & table->inpt_mask];
 	LIST_FOREACH(inp, head, inp_hash) {
-		if (!ISSET(inp->inp_flags, INP_IPV6))
-			continue;
+		KASSERT(ISSET(inp->inp_flags, INP_IPV6));
+
 		if (inp->inp_fport == fport && inp->inp_lport == lport &&
 		    IN6_ARE_ADDR_EQUAL(&inp->inp_faddr6, faddr) &&
 		    IN6_ARE_ADDR_EQUAL(&inp->inp_laddr6, laddr) &&

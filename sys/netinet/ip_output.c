@@ -1,4 +1,4 @@
-/*	$OpenBSD: ip_output.c,v 1.394 2024/01/31 14:56:43 bluhm Exp $	*/
+/*	$OpenBSD: ip_output.c,v 1.400 2024/06/07 18:24:16 bluhm Exp $	*/
 /*	$NetBSD: ip_output.c,v 1.28 1996/02/13 23:43:07 christos Exp $	*/
 
 /*
@@ -84,8 +84,8 @@ void ip_mloopback(struct ifnet *, struct mbuf *, struct sockaddr_in *);
 static u_int16_t in_cksum_phdr(u_int32_t, u_int32_t, u_int32_t);
 void in_delayed_cksum(struct mbuf *);
 
-int ip_output_ipsec_lookup(struct mbuf *m, int hlen, const u_char seclevel[],
-    struct tdb **, int ipsecflowinfo);
+int ip_output_ipsec_lookup(struct mbuf *m, int hlen,
+    const struct ipsec_level *seclevel, struct tdb **, int ipsecflowinfo);
 void ip_output_ipsec_pmtu_update(struct tdb *, struct route *, struct in_addr,
     int, int);
 int ip_output_ipsec_send(struct tdb *, struct mbuf *, struct route *, int);
@@ -98,7 +98,8 @@ int ip_output_ipsec_send(struct tdb *, struct mbuf *, struct route *, int);
  */
 int
 ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
-    struct ip_moptions *imo, const u_char seclevel[], u_int32_t ipsecflowinfo)
+    struct ip_moptions *imo, const struct ipsec_level *seclevel,
+    u_int32_t ipsecflowinfo)
 {
 	struct ip *ip;
 	struct ifnet *ifp = NULL;
@@ -166,8 +167,8 @@ reroute:
 	 * If there is a cached route, check that it is to the same
 	 * destination and is still up.  If not, free it and try again.
 	 */
-	route_cache(ro, ip->ip_dst, m->m_pkthdr.ph_rtableid);
-	dst = satosin(&ro->ro_dst);
+	route_cache(ro, &ip->ip_dst, &ip->ip_src, m->m_pkthdr.ph_rtableid);
+	dst = &ro->ro_dstsin;
 
 	if ((IN_MULTICAST(ip->ip_dst.s_addr) ||
 	    (ip->ip_dst.s_addr == INADDR_BROADCAST)) &&
@@ -185,7 +186,7 @@ reroute:
 		struct in_ifaddr *ia;
 
 		if (ro->ro_rt == NULL)
-			ro->ro_rt = rtalloc_mpath(&ro->ro_dst,
+			ro->ro_rt = rtalloc_mpath(&ro->ro_dstsa,
 			    &ip->ip_src.s_addr, ro->ro_tableid);
 
 		if (ro->ro_rt == NULL) {
@@ -253,7 +254,7 @@ reroute:
 		 * still points to the address in "ro".  (It may have been
 		 * changed to point to a gateway address, above.)
 		 */
-		dst = satosin(&ro->ro_dst);
+		dst = &ro->ro_dstsin;
 
 		/*
 		 * See if the caller provided any multicast options
@@ -417,6 +418,8 @@ sendit:
 	else if (m->m_pkthdr.pf.flags & PF_TAG_REROUTE) {
 		/* tag as generated to skip over pf_test on rerun */
 		m->m_pkthdr.pf.flags |= PF_TAG_GENERATED;
+		if (ro == &iproute)
+			rtfree(ro->ro_rt);
 		ro = NULL;
 		if_put(ifp); /* drop reference since target changed */
 		ifp = NULL;
@@ -425,8 +428,9 @@ sendit:
 #endif
 
 #ifdef IPSEC
-	if (ipsec_in_use && (flags & IP_FORWARDING) && (ipforwarding == 2) &&
-	    (m_tag_find(m, PACKET_TAG_IPSEC_IN_DONE, NULL) == NULL)) {
+	if ((flags & IP_FORWARDING) && ip_forwarding == 2 &&
+	    (!ipsec_in_use ||
+	    m_tag_find(m, PACKET_TAG_IPSEC_IN_DONE, NULL) == NULL)) {
 		error = EHOSTUNREACH;
 		goto bad;
 	}
@@ -455,7 +459,7 @@ sendit:
 			rtfree(ro->ro_rt);
 			ro->ro_tableid = orig_rtableid;
 			ro->ro_rt = icmp_mtudisc_clone(
-			    satosin(&ro->ro_dst)->sin_addr, ro->ro_tableid, 0);
+			    ro->ro_dstsin.sin_addr, ro->ro_tableid, 0);
 		}
 #endif
 		/*
@@ -481,7 +485,7 @@ sendit:
 	ipstat_inc(ips_fragmented);
 
 done:
-	if (ro == &iproute && ro->ro_rt)
+	if (ro == &iproute)
 		rtfree(ro->ro_rt);
 	if_put(ifp);
 #ifdef IPSEC
@@ -496,8 +500,8 @@ bad:
 
 #ifdef IPSEC
 int
-ip_output_ipsec_lookup(struct mbuf *m, int hlen, const u_char seclevel[],
-    struct tdb **tdbout, int ipsecflowinfo)
+ip_output_ipsec_lookup(struct mbuf *m, int hlen,
+    const struct ipsec_level *seclevel, struct tdb **tdbout, int ipsecflowinfo)
 {
 	struct m_tag *mtag;
 	struct tdb_ident *tdbi;
@@ -558,7 +562,8 @@ ip_output_ipsec_pmtu_update(struct tdb *tdb, struct route *ro,
 		rt->rt_mtu = tdb->tdb_mtu;
 		if (ro != NULL && ro->ro_rt != NULL) {
 			rtfree(ro->ro_rt);
-			ro->ro_rt = rtalloc(&ro->ro_dst, RT_RESOLVE, rtableid);
+			ro->ro_rt = rtalloc(&ro->ro_dstsa, RT_RESOLVE,
+			    rtableid);
 		}
 		if (rt_mtucloned)
 			rtfree(rt);
@@ -1016,7 +1021,7 @@ ip_ctloutput(int op, struct socket *so, int level, int optname,
 					error = EACCES;
 					break;
 				}
-				inp->inp_seclevel[SL_AUTH] = optval;
+				inp->inp_seclevel.sl_auth = optval;
 				break;
 
 			case IP_ESP_TRANS_LEVEL:
@@ -1025,7 +1030,7 @@ ip_ctloutput(int op, struct socket *so, int level, int optname,
 					error = EACCES;
 					break;
 				}
-				inp->inp_seclevel[SL_ESP_TRANS] = optval;
+				inp->inp_seclevel.sl_esp_trans = optval;
 				break;
 
 			case IP_ESP_NETWORK_LEVEL:
@@ -1034,7 +1039,7 @@ ip_ctloutput(int op, struct socket *so, int level, int optname,
 					error = EACCES;
 					break;
 				}
-				inp->inp_seclevel[SL_ESP_NETWORK] = optval;
+				inp->inp_seclevel.sl_esp_network = optval;
 				break;
 			case IP_IPCOMP_LEVEL:
 				if (optval < IPSEC_IPCOMP_LEVEL_DEFAULT &&
@@ -1042,7 +1047,7 @@ ip_ctloutput(int op, struct socket *so, int level, int optname,
 					error = EACCES;
 					break;
 				}
-				inp->inp_seclevel[SL_IPCOMP] = optval;
+				inp->inp_seclevel.sl_ipcomp = optval;
 				break;
 			}
 #endif
@@ -1186,18 +1191,18 @@ ip_ctloutput(int op, struct socket *so, int level, int optname,
 			m->m_len = sizeof(int);
 			switch (optname) {
 			case IP_AUTH_LEVEL:
-				optval = inp->inp_seclevel[SL_AUTH];
+				optval = inp->inp_seclevel.sl_auth;
 				break;
 
 			case IP_ESP_TRANS_LEVEL:
-				optval = inp->inp_seclevel[SL_ESP_TRANS];
+				optval = inp->inp_seclevel.sl_esp_trans;
 				break;
 
 			case IP_ESP_NETWORK_LEVEL:
-				optval = inp->inp_seclevel[SL_ESP_NETWORK];
+				optval = inp->inp_seclevel.sl_esp_network;
 				break;
 			case IP_IPCOMP_LEVEL:
-				optval = inp->inp_seclevel[SL_IPCOMP];
+				optval = inp->inp_seclevel.sl_ipcomp;
 				break;
 			}
 			*mtod(m, int *) = optval;

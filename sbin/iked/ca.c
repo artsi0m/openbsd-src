@@ -1,4 +1,4 @@
-/*	$OpenBSD: ca.c,v 1.99 2024/01/24 10:09:07 tobhe Exp $	*/
+/*	$OpenBSD: ca.c,v 1.102 2024/06/18 05:08:41 tb Exp $	*/
 
 /*
  * Copyright (c) 2010-2013 Reyk Floeter <reyk@openbsd.org>
@@ -46,7 +46,7 @@
 
 void	 ca_run(struct privsep *, struct privsep_proc *, void *);
 void	 ca_shutdown(void);
-void	 ca_reset(struct privsep *);
+void	 ca_reset(struct iked *);
 int	 ca_reload(struct iked *);
 
 int	 ca_cert_local(struct iked *, X509 *);
@@ -175,9 +175,8 @@ ca_getkey(struct privsep *ps, struct iked_id *key, enum imsg_type type)
 }
 
 void
-ca_reset(struct privsep *ps)
+ca_reset(struct iked *env)
 {
-	struct iked	*env = iked_env;
 	struct ca_store	*store = env->sc_priv;
 
 	if (store->ca_privkey.id_type == IKEV2_ID_NONE ||
@@ -333,12 +332,20 @@ ca_dispatch_parent(int fd, struct privsep_proc *p, struct imsg *imsg)
 	unsigned int		 mode;
 
 	switch (imsg->hdr.type) {
+	case IMSG_CTL_ACTIVE:
+	case IMSG_CTL_PASSIVE:
+		/*
+		 * send back to indicate we have processed
+		 * all messages from parent.
+		 */
+		proc_compose(&env->sc_ps, PROC_PARENT, imsg->hdr.type, NULL, 0);
+		break;
 	case IMSG_CTL_RESET:
 		IMSG_SIZE_CHECK(imsg, &mode);
 		memcpy(&mode, imsg->data, sizeof(mode));
 		if (mode == RESET_ALL || mode == RESET_CA) {
 			log_debug("%s: config reset", __func__);
-			ca_reset(&env->sc_ps);
+			ca_reset(env);
 		}
 		break;
 	case IMSG_OCSP_FD:
@@ -1978,13 +1985,13 @@ ca_x509_subjectaltname_do(X509 *cert, int mode, const char *logmsg,
 	GENERAL_NAME *entry;
 	ASN1_STRING *cstr;
 	char idstr[IKED_ID_SIZE];
-	int idx, ret, i, type, len;
+	int crit, ret, i, type, len;
 	const uint8_t *data;
 
 	ret = -1;
-	idx = -1;
-	while ((stack = X509_get_ext_d2i(cert, NID_subject_alt_name,
-	    NULL, &idx)) != NULL) {
+	crit = -1;
+	if ((stack = X509_get_ext_d2i(cert, NID_subject_alt_name,
+	    &crit, NULL)) != NULL) {
 		for (i = 0; i < sk_GENERAL_NAME_num(stack); i++) {
 			entry = sk_GENERAL_NAME_value(stack, i);
 			switch (entry->type) {
@@ -2064,12 +2071,14 @@ ca_x509_subjectaltname_do(X509 *cert, int mode, const char *logmsg,
 			}
 		}
 		sk_GENERAL_NAME_pop_free(stack, GENERAL_NAME_free);
-		if (ret != -1)
-			break;
-	}
-	if (idx == -1)
+	} else if (crit == -2)
+		log_info("%s: multiple subjectAltName extensions are invalid",
+		    __func__);
+	else if (crit == -1)
 		log_debug("%s: did not find subjectAltName in certificate",
 		    __func__);
+	else
+		log_debug("%s: failed to decode subjectAltName", __func__);
 	return ret;
 }
 

@@ -1,4 +1,4 @@
-/*	$OpenBSD: if_qwx_pci.c,v 1.4 2024/01/25 17:00:21 stsp Exp $	*/
+/*	$OpenBSD: if_qwx_pci.c,v 1.20 2024/06/11 10:06:35 stsp Exp $	*/
 
 /*
  * Copyright 2023 Stefan Sperling <stsp@openbsd.org>
@@ -50,14 +50,14 @@
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "bpfilter.h"
+
 #include <sys/param.h>
-#include <sys/sockio.h>
 #include <sys/mbuf.h>
-#include <sys/kernel.h>
+#include <sys/lock.h>
 #include <sys/socket.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
-#include <sys/conf.h>
 #include <sys/device.h>
 #include <sys/endian.h>
 
@@ -96,6 +96,7 @@
 #include <dev/ic/qwxreg.h>
 #include <dev/ic/qwxvar.h>
 
+#ifdef QWX_DEBUG 
 /* Headers needed for RDDM dump */
 #include <sys/namei.h>
 #include <sys/pledge.h>
@@ -103,6 +104,7 @@
 #include <sys/fcntl.h>
 #include <sys/stat.h>
 #include <sys/proc.h>
+#endif
 
 #define ATH11K_PCI_IRQ_CE0_OFFSET	3
 #define ATH11K_PCI_IRQ_DP_OFFSET	14
@@ -320,16 +322,6 @@ struct qwx_pci_cmd_ring {
 struct qwx_pci_ops;
 struct qwx_msi_config;
 
-struct qwx_mhi_newstate {
-	struct {
-		int mhi_state;
-		int ee;
-	} queue[4];
-	int cur;
-	int tail;
-	int queued;
-};
-
 #define QWX_NUM_MSI_VEC	32
 
 struct qwx_pci_softc {
@@ -363,11 +355,8 @@ struct qwx_pci_softc {
 
 	uint64_t		 wake_db;
 
-	struct qwx_mhi_newstate	 mhi_newstate;
-	struct task		 mhi_newstate_task;
-
 	/*
-	 * DMA memory for AMMS.bin firmware image.
+	 * DMA memory for AMSS.bin firmware image.
 	 * This memory must remain available to the device until
 	 * the device is powered down.
 	 */
@@ -398,7 +387,6 @@ int	qwx_pci_match(struct device *, void *, void *);
 void	qwx_pci_attach(struct device *, struct device *, void *);
 int	qwx_pci_detach(struct device *, int);
 void	qwx_pci_attach_hook(struct device *);
-int	qwx_pci_activate(struct device *, int);
 void	qwx_pci_free_xfer_rings(struct qwx_pci_softc *);
 int	qwx_pci_alloc_xfer_ring(struct qwx_softc *, struct qwx_pci_xfer_ring *,
 	    uint32_t, uint32_t, uint32_t, size_t);
@@ -459,7 +447,6 @@ int	qwx_mhi_fw_load_handler(struct qwx_pci_softc *);
 int	qwx_mhi_await_device_reset(struct qwx_softc *);
 int	qwx_mhi_await_device_ready(struct qwx_softc *);
 void	qwx_mhi_ready_state_transition(struct qwx_pci_softc *);
-void	qwx_mhi_ee_amss_state_transition(struct qwx_pci_softc *);
 void	qwx_mhi_mission_mode_state_transition(struct qwx_pci_softc *);
 void	qwx_mhi_low_power_mode_state_transition(struct qwx_pci_softc *);
 void	qwx_mhi_set_state(struct qwx_softc *, uint32_t);
@@ -467,10 +454,10 @@ void	qwx_mhi_init_mmio(struct qwx_pci_softc *);
 int	qwx_mhi_fw_load_bhi(struct qwx_pci_softc *, uint8_t *, size_t);
 int	qwx_mhi_fw_load_bhie(struct qwx_pci_softc *, uint8_t *, size_t);
 void	qwx_rddm_prepare(struct qwx_pci_softc *);
+#ifdef QWX_DEBUG
 void	qwx_rddm_task(void *);
+#endif
 void *	qwx_pci_event_ring_get_elem(struct qwx_pci_event_ring *, uint64_t);
-void	qwx_mhi_queue_state_change(struct qwx_pci_softc *, int, int);
-void	qwx_mhi_state_change(void *);
 void	qwx_pci_intr_ctrl_event_mhi(struct qwx_pci_softc *, uint32_t);
 void	qwx_pci_intr_ctrl_event_ee(struct qwx_pci_softc *, uint32_t);
 void	qwx_pci_intr_ctrl_event_cmd_complete(struct qwx_pci_softc *,
@@ -522,7 +509,7 @@ const struct cfattach qwx_pci_ca = {
 	qwx_pci_match,
 	qwx_pci_attach,
 	qwx_pci_detach,
-	qwx_pci_activate
+	qwx_activate
 };
 
 /* XXX pcidev */
@@ -769,6 +756,10 @@ qwx_pci_attach(struct device *parent, struct device *self, void *aux)
 	sc->sc_dmat = pa->pa_dmat;
 	psc->sc_pc = pa->pa_pc;
 	psc->sc_tag = pa->pa_tag;
+
+#ifdef __HAVE_FDT
+	sc->sc_node = PCITAG_NODE(pa->pa_tag);
+#endif
 
 	rw_init(&sc->ioctl_rwl, "qwxioctl");
 
@@ -1055,9 +1046,9 @@ unsupported_wcn6855_soc:
 		goto err_irq_affinity_cleanup;
 	}
 #endif
-	task_set(&psc->mhi_newstate_task, qwx_mhi_state_change, psc);
+#ifdef QWX_DEBUG
 	task_set(&psc->rddm_task, qwx_rddm_task, psc);
-
+#endif
 	ic->ic_phytype = IEEE80211_T_OFDM;	/* not only, but not used */
 	ic->ic_opmode = IEEE80211_M_STA;	/* default to BSS mode */
 	ic->ic_state = IEEE80211_S_INIT;
@@ -1100,6 +1091,8 @@ unsupported_wcn6855_soc:
 	/* Override 802.11 state transition machine. */
 	sc->sc_newstate = ic->ic_newstate;
 	ic->ic_newstate = qwx_newstate;
+	ic->ic_set_key = qwx_set_key;
+	ic->ic_delete_key = qwx_delete_key;
 #if 0
 	ic->ic_updatechan = qwx_updatechan;
 	ic->ic_updateprot = qwx_updateprot;
@@ -1190,19 +1183,6 @@ qwx_pci_attach_hook(struct device *self)
 	qwx_attach(sc);
 
 	splx(s);
-}
-
-int
-qwx_pci_activate(struct device *self, int act)
-{
-	switch (act) {
-	case DVACT_SUSPEND:
-		break;
-	case DVACT_WAKEUP:
-		break;
-	}
-
-	return 0;
 }
 
 void
@@ -1561,7 +1541,7 @@ qwx_pcic_ext_irq_disable(struct qwx_softc *sc)
 	if (!test_bit(ATH11K_FLAG_MULTI_MSI_VECTORS, sc->sc_flags))
 		return;
 
-	printf("%s not implemented\n", __func__);
+	DPRINTF("%s not implemented\n", __func__);
 }
 
 void
@@ -1575,7 +1555,7 @@ qwx_pcic_ext_irq_enable(struct qwx_softc *sc)
 	if (!test_bit(ATH11K_FLAG_MULTI_MSI_VECTORS, sc->sc_flags))
 		return;
 
-	printf("%s not implemented\n", __func__);
+	DPRINTF("%s not implemented\n", __func__);
 }
 
 void
@@ -2925,10 +2905,14 @@ qwx_mhi_start(struct qwx_pci_softc *psc)
 #endif
 
 	/* Transition to primary runtime. */
-	 if (MHI_IN_PBL(ee)) {
+	if (MHI_IN_PBL(ee)) {
 		ret = qwx_mhi_fw_load_handler(psc);
 		if (ret)
 			return ret;
+
+		/* XXX without this delay starting the channels may fail */
+		delay(1000);
+		qwx_mhi_start_channels(psc);
 	} else {
 		/* XXX Handle partially initialized device...?!? */
 		ee = qwx_pci_read(sc, psc->bhi_off + MHI_BHI_EXECENV);
@@ -3024,23 +3008,31 @@ qwx_mhi_fw_load_handler(struct qwx_pci_softc *psc)
 	u_char *data;
 	size_t len;
 
-	ret = snprintf(amss_path, sizeof(amss_path), "%s-%s-%s",
-	    ATH11K_FW_DIR, sc->hw_params.fw.dir, ATH11K_AMSS_FILE);
-	if (ret < 0 || ret >= sizeof(amss_path))
-		return ENOSPC;
+	if (sc->fw_img[QWX_FW_AMSS].data) {
+		data = sc->fw_img[QWX_FW_AMSS].data;
+		len = sc->fw_img[QWX_FW_AMSS].size;
+	} else {
+		ret = snprintf(amss_path, sizeof(amss_path), "%s-%s-%s",
+		    ATH11K_FW_DIR, sc->hw_params.fw.dir, ATH11K_AMSS_FILE);
+		if (ret < 0 || ret >= sizeof(amss_path))
+			return ENOSPC;
 
-	ret = loadfirmware(amss_path, &data, &len);
-	if (ret) {
-		printf("%s: could not read %s (error %d)\n",
-		    sc->sc_dev.dv_xname, amss_path, ret);
-		return ret;
-	}
+		ret = loadfirmware(amss_path, &data, &len);
+		if (ret) {
+			printf("%s: could not read %s (error %d)\n",
+			    sc->sc_dev.dv_xname, amss_path, ret);
+			return ret;
+		}
 
-	if (len < MHI_DMA_VEC_CHUNK_SIZE) {
-		printf("%s: %s is too short, have only %zu bytes\n",
-		    sc->sc_dev.dv_xname, amss_path, len);
-		free(data, M_DEVBUF, len);
-		return EINVAL;
+		if (len < MHI_DMA_VEC_CHUNK_SIZE) {
+			printf("%s: %s is too short, have only %zu bytes\n",
+			    sc->sc_dev.dv_xname, amss_path, len);
+			free(data, M_DEVBUF, len);
+			return EINVAL;
+		}
+
+		sc->fw_img[QWX_FW_AMSS].data = data;
+		sc->fw_img[QWX_FW_AMSS].size = len;
 	}
 
 	/* Second-stage boot loader sits in the first 512 KB of image. */
@@ -3048,20 +3040,6 @@ qwx_mhi_fw_load_handler(struct qwx_pci_softc *psc)
 	if (ret != 0) {
 		printf("%s: could not load firmware %s\n",
 		    sc->sc_dev.dv_xname, amss_path);
-		free(data, M_DEVBUF, len);
-		return ret;
-	}
-
-	while (psc->bhi_ee < MHI_EE_SBL) {
-		ret = tsleep_nsec(&psc->bhi_ee, 0, "qwxsbl",
-		    SEC_TO_NSEC(2));
-		if (ret)
-			break;
-	}
-	if (ret != 0) {
-		printf("%s: device failed to start secondary bootloader\n",
-		    sc->sc_dev.dv_xname);
-		free(data, M_DEVBUF, len);
 		return ret;
 	}
 
@@ -3070,6 +3048,7 @@ qwx_mhi_fw_load_handler(struct qwx_pci_softc *psc)
 	if (ret != 0) {
 		printf("%s: could not load firmware %s\n",
 		    sc->sc_dev.dv_xname, amss_path);
+		return ret;
 	}
 
 	while (psc->bhi_ee < MHI_EE_AMSS) {
@@ -3081,11 +3060,8 @@ qwx_mhi_fw_load_handler(struct qwx_pci_softc *psc)
 	if (ret != 0) {
 		printf("%s: device failed to enter AMSS EE\n",
 		    sc->sc_dev.dv_xname);
-		free(data, M_DEVBUF, len);
-		return ret;
 	}
 
-	free(data, M_DEVBUF, len);
 	return ret;
 }
 
@@ -3171,12 +3147,6 @@ qwx_mhi_ready_state_transition(struct qwx_pci_softc *psc)
 	 * into M0 and the execution environment will switch to SBL.
 	 */
 	qwx_mhi_set_state(sc, MHI_STATE_M0);
-}
-
-void
-qwx_mhi_ee_amss_state_transition(struct qwx_pci_softc *psc)
-{
-	qwx_mhi_start_channels(psc);
 }
 
 void
@@ -3312,25 +3282,24 @@ qwx_mhi_fw_load_bhi(struct qwx_pci_softc *psc, uint8_t *data, size_t len)
 
 	/* Wait for completion. */
 	ret = 0;
-	while (status != MHI_BHI_STATUS_SUCCESS) {
-		ret = tsleep_nsec(&psc->bhi_off, 0, "qwxbhi",
-		    SEC_TO_NSEC(1));
+	while (status != MHI_BHI_STATUS_SUCCESS && psc->bhi_ee < MHI_EE_SBL) {
+		ret = tsleep_nsec(&psc->bhi_ee, 0, "qwxbhi", SEC_TO_NSEC(5));
 		if (ret)
 			break;
-
 		reg = qwx_pci_read(sc, psc->bhi_off + MHI_BHI_STATUS);
 		status = (reg & MHI_BHI_STATUS_MASK) >> MHI_BHI_STATUS_SHFT;
-		DNPRINTF(QWX_D_MHI, "%s: BHI status is 0x%x\n",
-		    __func__, status);
 	}
-
-	qwx_dmamem_free(sc->sc_dmat, data_adm);
 
 	if (ret) {
 		printf("%s: BHI load timeout\n", sc->sc_dev.dv_xname);
-		return ret;
+		reg = qwx_pci_read(sc, psc->bhi_off + MHI_BHI_STATUS);
+		status = (reg & MHI_BHI_STATUS_MASK) >> MHI_BHI_STATUS_SHFT;
+		DNPRINTF(QWX_D_MHI, "%s: BHI status is 0x%x EE is 0x%x\n",
+		    __func__, status, psc->bhi_ee);
 	}
-	return 0;
+
+	qwx_dmamem_free(sc->sc_dmat, data_adm);
+	return ret;
 }
 
 int
@@ -3504,6 +3473,7 @@ qwx_rddm_prepare(struct qwx_pci_softc *psc)
 	psc->rddm_vec = vec_adm;
 }
 
+#ifdef QWX_DEBUG
 void
 qwx_rddm_task(void *arg)
 {
@@ -3598,6 +3568,7 @@ done:
 	psc->rddm_vec = NULL;
 	DPRINTF("%s: done, error %d\n", __func__, error);
 }
+#endif
 
 void *
 qwx_pci_event_ring_get_elem(struct qwx_pci_event_ring *ring, uint64_t rp)
@@ -3616,117 +3587,87 @@ qwx_pci_event_ring_get_elem(struct qwx_pci_event_ring *ring, uint64_t rp)
 }
 
 void
-qwx_mhi_state_change(void *arg)
+qwx_mhi_state_change(struct qwx_pci_softc *psc, int ee, int mhi_state)
 {
-	struct qwx_pci_softc *psc = arg;
 	struct qwx_softc *sc = &psc->sc_sc;
-	struct qwx_mhi_newstate *ns = &psc->mhi_newstate;
+	uint32_t old_ee = psc->bhi_ee;
+	uint32_t old_mhi_state = psc->mhi_state;
 
-	while (ns->tail != ns->cur) {
-		int mhi_state = ns->queue[ns->tail].mhi_state;
-		int ee = ns->queue[ns->tail].ee;
-		uint32_t old_ee = psc->bhi_ee;
-		uint32_t old_mhi_state = psc->mhi_state;
-
-		KASSERT(ns->queued > 0);
-
-		if (ee != -1 && psc->bhi_ee != ee) {
-			switch (ee) {
-			case MHI_EE_PBL:
-				DNPRINTF(QWX_D_MHI, "%s: new EE PBL\n",
-				    sc->sc_dev.dv_xname);
-				psc->bhi_ee = ee;
-				break;
-			case MHI_EE_SBL:
-				psc->bhi_ee = ee;
-				DNPRINTF(QWX_D_MHI, "%s: new EE SBL\n",
-				    sc->sc_dev.dv_xname);
-				break;
-			case MHI_EE_AMSS:
-				DNPRINTF(QWX_D_MHI, "%s: new EE AMSS\n",
-				    sc->sc_dev.dv_xname);
-				psc->bhi_ee = ee;
-				qwx_mhi_ee_amss_state_transition(psc);
-				/* Wake thread loading the full AMSS image. */
-				wakeup(&psc->bhie_off);
-				break;
-			case MHI_EE_WFW:
-				DNPRINTF(QWX_D_MHI, "%s: new EE WFW\n",
-				    sc->sc_dev.dv_xname);
-				psc->bhi_ee = ee;
-				break;
-			default:
-				printf("%s: unhandled EE change to %x\n",
-				    sc->sc_dev.dv_xname, ee);
-				break;
-			}
+	if (ee != -1 && psc->bhi_ee != ee) {
+		switch (ee) {
+		case MHI_EE_PBL:
+			DNPRINTF(QWX_D_MHI, "%s: new EE PBL\n",
+			    sc->sc_dev.dv_xname);
+			psc->bhi_ee = ee;
+			break;
+		case MHI_EE_SBL:
+			psc->bhi_ee = ee;
+			DNPRINTF(QWX_D_MHI, "%s: new EE SBL\n",
+			    sc->sc_dev.dv_xname);
+			break;
+		case MHI_EE_AMSS:
+			DNPRINTF(QWX_D_MHI, "%s: new EE AMSS\n",
+			    sc->sc_dev.dv_xname);
+			psc->bhi_ee = ee;
+			/* Wake thread loading the full AMSS image. */
+			wakeup(&psc->bhie_off);
+			break;
+		case MHI_EE_WFW:
+			DNPRINTF(QWX_D_MHI, "%s: new EE WFW\n",
+			    sc->sc_dev.dv_xname);
+			psc->bhi_ee = ee;
+			break;
+		default:
+			printf("%s: unhandled EE change to %x\n",
+			    sc->sc_dev.dv_xname, ee);
+			break;
 		}
-
-		if (mhi_state != -1 && psc->mhi_state != mhi_state) {
-			switch (mhi_state) {
-			case -1:
-				break;
-			case MHI_STATE_RESET:
-				DNPRINTF(QWX_D_MHI, "%s: new MHI state RESET\n",
-				    sc->sc_dev.dv_xname);
-				psc->mhi_state = mhi_state;
-				break;
-			case MHI_STATE_READY:
-				DNPRINTF(QWX_D_MHI, "%s: new MHI state READY\n",
-				    sc->sc_dev.dv_xname);
-				psc->mhi_state = mhi_state;
-				qwx_mhi_ready_state_transition(psc);
-				break;
-			case MHI_STATE_M0:
-				DNPRINTF(QWX_D_MHI, "%s: new MHI state M0\n",
-				    sc->sc_dev.dv_xname);
-				psc->mhi_state = mhi_state;
-				qwx_mhi_mission_mode_state_transition(psc);
-				break;
-			case MHI_STATE_M1:
-				DNPRINTF(QWX_D_MHI, "%s: new MHI state M1\n",
-				    sc->sc_dev.dv_xname);
-				psc->mhi_state = mhi_state;
-				qwx_mhi_low_power_mode_state_transition(psc);
-				break;
-			case MHI_STATE_SYS_ERR:
-				DNPRINTF(QWX_D_MHI,
-				    "%s: new MHI state SYS ERR\n",
-				    sc->sc_dev.dv_xname);
-				psc->mhi_state = mhi_state;
-				break;
-			default:
-				printf("%s: unhandled MHI state change to %x\n",
-				    sc->sc_dev.dv_xname, mhi_state);
-				break;
-			}
-		}
-
-		if (old_ee != psc->bhi_ee)
-			wakeup(&psc->bhi_ee);
-		if (old_mhi_state != psc->mhi_state)
-			wakeup(&psc->mhi_state);
-
-		ns->tail = (ns->tail + 1) % nitems(ns->queue);
-		ns->queued--;
-	}
-}
-
-void
-qwx_mhi_queue_state_change(struct qwx_pci_softc *psc, int ee, int mhi_state)
-{
-	struct qwx_mhi_newstate *ns = &psc->mhi_newstate;
-
-	if (ns->queued >= nitems(ns->queue)) {
-		printf("%s: event queue full, dropping event\n", __func__);
-		return;
 	}
 
-	ns->queue[ns->cur].ee = ee;
-	ns->queue[ns->cur].mhi_state = mhi_state;
-	ns->queued++;
-	ns->cur = (ns->cur + 1) % nitems(ns->queue);
-	task_add(systq, &psc->mhi_newstate_task);
+	if (mhi_state != -1 && psc->mhi_state != mhi_state) {
+		switch (mhi_state) {
+		case -1:
+			break;
+		case MHI_STATE_RESET:
+			DNPRINTF(QWX_D_MHI, "%s: new MHI state RESET\n",
+			    sc->sc_dev.dv_xname);
+			psc->mhi_state = mhi_state;
+			break;
+		case MHI_STATE_READY:
+			DNPRINTF(QWX_D_MHI, "%s: new MHI state READY\n",
+			    sc->sc_dev.dv_xname);
+			psc->mhi_state = mhi_state;
+			qwx_mhi_ready_state_transition(psc);
+			break;
+		case MHI_STATE_M0:
+			DNPRINTF(QWX_D_MHI, "%s: new MHI state M0\n",
+			    sc->sc_dev.dv_xname);
+			psc->mhi_state = mhi_state;
+			qwx_mhi_mission_mode_state_transition(psc);
+			break;
+		case MHI_STATE_M1:
+			DNPRINTF(QWX_D_MHI, "%s: new MHI state M1\n",
+			    sc->sc_dev.dv_xname);
+			psc->mhi_state = mhi_state;
+			qwx_mhi_low_power_mode_state_transition(psc);
+			break;
+		case MHI_STATE_SYS_ERR:
+			DNPRINTF(QWX_D_MHI,
+			    "%s: new MHI state SYS ERR\n",
+			    sc->sc_dev.dv_xname);
+			psc->mhi_state = mhi_state;
+			break;
+		default:
+			printf("%s: unhandled MHI state change to %x\n",
+			    sc->sc_dev.dv_xname, mhi_state);
+			break;
+		}
+	}
+
+	if (old_ee != psc->bhi_ee)
+		wakeup(&psc->bhi_ee);
+	if (old_mhi_state != psc->mhi_state)
+		wakeup(&psc->mhi_state);
 }
 
 void
@@ -3735,7 +3676,8 @@ qwx_pci_intr_ctrl_event_mhi(struct qwx_pci_softc *psc, uint32_t mhi_state)
 	DNPRINTF(QWX_D_MHI, "%s: MHI state change 0x%x -> 0x%x\n", __func__,
 	    psc->mhi_state, mhi_state);
 
-	qwx_mhi_queue_state_change(psc, -1, mhi_state);
+	if (psc->mhi_state != mhi_state)
+		qwx_mhi_state_change(psc, -1, mhi_state);
 }
 
 void
@@ -3744,7 +3686,8 @@ qwx_pci_intr_ctrl_event_ee(struct qwx_pci_softc *psc, uint32_t ee)
 	DNPRINTF(QWX_D_MHI, "%s: EE change 0x%x to 0x%x\n", __func__,
 	    psc->bhi_ee, ee);
 
-	qwx_mhi_queue_state_change(psc, ee, -1);
+	if (psc->bhi_ee != ee)
+		qwx_mhi_state_change(psc, ee, -1);
 }
 
 void
@@ -4137,25 +4080,38 @@ qwx_pci_intr(void *arg)
 	     sc->sc_dev.dv_xname, psc->bhi_ee, ee, psc->mhi_state, state);
 
 	if (ee == MHI_EE_RDDM) {
+		/* Firmware crash, e.g. due to invalid DMA memory access. */
 		psc->bhi_ee = ee;
+#ifdef QWX_DEBUG
 		if (!psc->rddm_triggered) {
+			/* Write fw memory dump to root's home directory. */
 			task_add(systq, &psc->rddm_task);
 			psc->rddm_triggered = 1;
 		}
+#else
+		printf("%s: fatal firmware error\n",
+		   sc->sc_dev.dv_xname);
+		if (!test_bit(ATH11K_FLAG_CRASH_FLUSH, sc->sc_flags) &&
+		    (sc->sc_ic.ic_if.if_flags & (IFF_UP | IFF_RUNNING)) ==
+		    (IFF_UP | IFF_RUNNING)) {
+			/* Try to reset the device. */
+			set_bit(ATH11K_FLAG_CRASH_FLUSH, sc->sc_flags);
+			task_add(systq, &sc->init_task);
+		}
+#endif
 		return 1;
 	} else if (psc->bhi_ee == MHI_EE_PBL || psc->bhi_ee == MHI_EE_SBL) {
 		int new_ee = -1, new_mhi_state = -1;
 
 		if (psc->bhi_ee != ee)
 			new_ee = ee;
-		if (state < MHI_STATE_M0 && psc->mhi_state != state)
+
+		if (psc->mhi_state != state)
 			new_mhi_state = state;
 
 		if (new_ee != -1 || new_mhi_state != -1)
-			qwx_mhi_queue_state_change(psc, new_ee, new_mhi_state);
+			qwx_mhi_state_change(psc, new_ee, new_mhi_state);
 
-		/* Wake thread loading second stage bootloader. */
-		wakeup(&psc->bhi_off);
 		ret = 1;
 	}
 
